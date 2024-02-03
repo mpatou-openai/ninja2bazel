@@ -1,37 +1,10 @@
-#!/usr/bin/python3
 import os
 import sys
 import unittest
 from unittest.mock import Mock, call
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from parser import (Build, BuildTarget, NinjaParser, Rule,  # noqa: E402
-                    get_top_levels)
-
-
-class TestParser(unittest.TestCase):
-    def setUp(self):
-        cur_dir = os.path.dirname(os.path.abspath(__file__))
-        with open(f"{cur_dir}/data/build.ninja", "r") as f:
-            raw_ninja = f.readlines()
-
-        self.current_dir = cur_dir
-        self.raw_file = raw_ninja
-
-    def test_parse_simple_file(self):
-        parser = NinjaParser()
-        parser.parse(self.raw_file, f"{self.current_dir}/data")
-        levels = get_top_levels(parser)
-        self.assertEqual(1, len(levels))
-        self.assertEqual(str(levels[0]), "xarexec_fuse")
-
-    def test_resolveName(self):
-        parser = NinjaParser()
-        parser.parse(self.raw_file, f"{self.current_dir}/data")
-        v = parser._resolveName("foobar$cmake_ninja_workdir")
-        v2 = parser._resolveName("foo${cmake_ninja_workdir}bar")
-        self.assertEqual(v, "foobartmp.1STpxdK06d")
-        self.assertEqual(v2, "footmp.1STpxdK06dbar")
+from ninjabuild import Build, BuildTarget, Rule  # noqa: E402
 
 
 class TestVisitGraph(unittest.TestCase):
