@@ -38,7 +38,7 @@ class TestParser(unittest.TestCase):
         parser.parse(self.raw_file, f"{self.current_dir}/data")
         top_levels = getToplevels(parser)
         with contextlib.redirect_stdout(None):
-            top_levels[0].print_graph()
+            top_levels[0].printGraph()
 
 
 if __name__ == "__main__":

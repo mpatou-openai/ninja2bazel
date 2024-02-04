@@ -2,9 +2,11 @@ import logging
 import os
 import re
 import sys
+from functools import total_ordering
 from typing import Any, Callable, Dict, List, Optional
 
 from bazel import BazelBuild, BazelTarget
+from cppfileparser import findAllHeaderFiles, findIncludes
 
 IGNORED_STANZA = [
     "ninja_required_version",
@@ -23,6 +25,7 @@ IGNORED_TARGETS = [
 ]
 
 
+@total_ordering
 class BuildTarget:
     def __init__(self, name: str):
         self.name = name
@@ -30,6 +33,19 @@ class BuildTarget:
         self.usedbybuilds: List["Build"] = []
         self.is_a_file = False
         self.unknown_producer = False
+        self.headers = None
+
+    def __hash__(self) -> int:
+        return self.name.__hash__()
+
+    def __eq__(self, other) -> bool:
+        return self.name == other.name
+
+    def __lt__(self, other) -> bool:
+        return self.name < other.name
+
+    def setHeadersFiles(self, files: List[str]):
+        self.headers = files
 
     def markAsUnknown(self):
         self.unknown_producer = True
@@ -82,18 +98,20 @@ class BuildTarget:
                 and len(d.producedby.inputs) == 0
                 and len(d.producedby.depends) == 0
             ):
-                v = True
                 return True
             v = d.depsAreVirtual()
             if not v:
                 return False
         return False
 
-    def visit_graph(
+    def visitGraph(
         self,
         visitor: Callable[["BuildTarget", Dict[str, Any]], bool],
         ctx: Dict[str, Any],
     ):
+        # If we are visiting a target that is a file ord
+        # a target that is produced by something that is either not phony
+        # of is phony but has real inputs / deps
         if self.is_a_file or not (
             self.producedby
             and self.producedby.rulename.name == "phony"
@@ -102,15 +120,15 @@ class BuildTarget:
         ):
             visitor(self, ctx)
         if self.producedby:
-            for e in self.producedby.inputs:
+            for e in sorted(self.producedby.inputs):
                 newctx = ctx["setup_subcontext"](ctx)
-                e.visit_graph(visitor, newctx)
-            for e in self.producedby.depends:
+                e.visitGraph(visitor, newctx)
+            for e in sorted(self.producedby.depends):
                 if not e.depsAreVirtual():
                     newctx = ctx["setup_subcontext"](ctx)
-                    e.visit_graph(visitor, newctx)
+                    e.visitGraph(visitor, newctx)
 
-    def print_graph(self, ident: int = 0, file=sys.stdout):
+    def printGraph(self, ident: int = 0, file=sys.stdout):
         def visitor(el: "BuildTarget", ctx: Dict[str, Any]):
             print(" " * ctx["ident"] + el.name)
 
@@ -125,7 +143,7 @@ class BuildTarget:
             "setup_subcontext": setup,
         }
 
-        self.visit_graph(visitor, ctx)
+        self.visitGraph(visitor, ctx)
 
     def _handleCmdForBazelGen(self, cmd: str, el: "BuildTarget", ctx: Dict[str, Any]):
         if ("c++" in cmd or "g++" in cmd) and "$LINK_FLAGS" in cmd:
@@ -149,9 +167,10 @@ class BuildTarget:
             return
         logging.debug(cmd)
 
-    def gen_bazel(self, bb: BazelBuild, rootdir: str):
+    def genBazel(self, bb: BazelBuild, rootdir: str):
         def visitor(el: "BuildTarget", ctx: Dict[str, Any]):
             if el.producedby:
+                ctx["producer"] = el.producedby
                 rule = el.producedby.rulename
                 c = rule.vars.get("command")
                 assert c is not None
@@ -166,9 +185,18 @@ class BuildTarget:
                 else:
                     self._handleCmdForBazelGen(cmd, el, ctx)
             else:
-                # Not produced aka it's a file
                 assert ctx["dest"] is not None
-                ctx["dest"].addSrc(el.name.replace(ctx["rootdir"], ""))
+                logging.debug(ctx["producer"].vars)
+                if el.name.endswith(".h") or el.name.endswith(".hpp"):
+                    ctx["dest"].addHdr(el.name.replace(ctx["rootdir"], ""))
+                else:
+                    # Not produced aka it's a file
+                    # we have to parse the file and see if there is any includes
+                    # if it's a "" include then we look first in the path where the file is and then
+                    # in the path specified with -I
+                    ctx["dest"].addSrc(el.name.replace(ctx["rootdir"], ""))
+                    for h in el.headers:
+                        ctx["dest"].addHdr(h.replace(ctx["rootdir"], ""))
 
         def setup(ctx):
             ctx2 = {k: v for k, v in ctx.items()}
@@ -182,7 +210,7 @@ class BuildTarget:
         else:
             ctx["rootdir"] = f"{rootdir}/"
 
-        self.visit_graph(visitor, ctx)
+        self.visitGraph(visitor, ctx)
 
 
 class Rule:
@@ -238,6 +266,7 @@ class NinjaParser:
         self.rules = {}
         self.rules["phony"] = Rule("phony")
         self.directories = []
+        self.headers_files = {}
 
     def markDone(self):
         # What ever we had so far, we mark at finished
@@ -349,6 +378,16 @@ class NinjaParser:
         cur_dir = os.path.dirname(os.path.abspath(filename))
         self.parse(raw_ninja, cur_dir)
 
+    def finalizeHeaders(self, current_dir: str):
+        for t in self.all_outputs.values():
+            if not t.producedby:
+                continue
+            for i in t.producedby.inputs:
+                if i.is_a_file:
+                    includes = t.producedby.vars.get("INCLUDES")
+                    headers = findIncludes(i.name, includes)
+                    i.setHeadersFiles(headers)
+
     def parse(self, content: List[str], current_dir: str):
         self.directories.append(current_dir)
         for line in content:
@@ -423,11 +462,12 @@ def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
     for o in parser.all_outputs.values():
         if o.isOnlyUsedBy(["all"]):
             real_top_targets.append(o)
-            logging.debug(f"{o} produced by {o.producedby.rulename}")
+            logging.error(o)
+            # logging.debug(f"{o} produced by {o.producedby.rulename}")
             continue
         if str(o) in IGNORED_TARGETS or o.isOnlyUsedBy(IGNORED_TARGETS):
             continue
-        if o.producedby.rulename.name == "phony":
+        if o.producedby is not None and o.producedby.rulename.name == "phony":
             # Look at all the phony build outputs
             # if all their inputs are used in another build then it's kind of an alias
             # and so it's not a top level build
@@ -438,7 +478,8 @@ def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
             if count == len(o.producedby.inputs):
                 continue
         if len(o.usedbybuilds) == 0:
-            logging.debug(f"{o} produced by {o.producedby.rulename.name}")
+            logging.error(o)
+            # logging.debug(f"{o} produced by {o.producedby.rulename.name}")
             real_top_targets.append(o)
 
     return real_top_targets
@@ -455,12 +496,13 @@ def getBuildTargets(raw_ninja: List[str], dir: str):
         return
 
     top_levels = getToplevels(parser)
+    parser.finalizeHeaders(dir)
     return top_levels
 
 
 def genBazelBuildFiles(top_levels: list[BuildTarget], rootdir: str) -> str:
     bb = BazelBuild()
-    for e in top_levels:
-        e.gen_bazel(bb, rootdir)
+    for e in sorted(top_levels):
+        e.genBazel(bb, rootdir)
 
     return bb.genBazelBuildContent()
