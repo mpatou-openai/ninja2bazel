@@ -110,10 +110,14 @@ class BuildTarget:
             logging.debug(f"{self} is a file")
             return False
 
+        if self.producedby is None and self.type == TargetType.external:
+            logging.debug(f"{self} is an external dependency")
+            return True
+
         if self.producedby is None and not self.is_a_file:
             logging.warning(
                 f"{self.name} is a dependency for something else, is not a file"
-                " and has nothing producing it, assuming it's a virtual dependency"
+                f" and has nothing producing it, assuming it's a virtual dependency"
             )
             return True
 
@@ -211,9 +215,15 @@ class BuildTarget:
                         found = True
                         break
                 if not found:
+                    logging.warning(f"{el} has no valid command {el.producedby.inputs}")
                     logging.warning(f"Didn't find a valid command in {c}")
                 else:
+                    # Fixme split this to detect if it's a compiler or ar or something else
                     self._handleCmdForBazelGen(cmd, el, ctx)
+            elif el.producedby and el.producedby.rulename.name == "phony":
+                if ctx.get("dest") is None:
+                    print(el)
+                pass
             else:
                 assert ctx["dest"] is not None
                 logging.debug(ctx["producer"].vars)
@@ -225,6 +235,8 @@ class BuildTarget:
                     # if it's a "" include then we look first in the path where the file is and then
                     # in the path specified with -I
                     ctx["dest"].addSrc(el.name.replace(ctx["rootdir"], ""))
+                    if not el.headers:
+                        print(f"Missing headers for {el}")
                     for h in el.headers:
                         ctx["dest"].addHdr(h.replace(ctx["rootdir"], ""))
 
@@ -418,7 +430,16 @@ class NinjaParser:
                     headers = findIncludes(i.name, includes)
                     i.setHeadersFiles(headers)
 
-    def parse(self, content: List[str], current_dir: str):
+    def inlinePhony(self):
+        for o in self.all_outputs.values():
+            if o.producedby.rulename.name == "phony":
+                print(f"{o} produced by {o.producedby.rulename}")
+
+    def parse(
+        self,
+        content: List[str],
+        current_dir: str,
+    ):
         self.directories.append(current_dir)
         for line in content:
             line = line.rstrip()
@@ -492,7 +513,6 @@ def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
     for o in parser.all_outputs.values():
         if o.isOnlyUsedBy(["all"]):
             real_top_targets.append(o)
-            logging.error(o)
             # logging.debug(f"{o} produced by {o.producedby.rulename}")
             continue
         if str(o) in IGNORED_TARGETS or o.isOnlyUsedBy(IGNORED_TARGETS):
@@ -507,21 +527,28 @@ def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
                     count += 1
             if count == len(o.producedby.inputs):
                 continue
-        if len(o.usedbybuilds) == 0:
-            logging.error(o)
+        if (
+            len(o.usedbybuilds) == 0
+            and not o.implicit
+            and not str(o).endswith("_tests.cmake")
+        ):
+            logging.error(f"{o} used by no one")
             # logging.debug(f"{o} produced by {o.producedby.rulename.name}")
             real_top_targets.append(o)
 
     return real_top_targets
 
 
-def getBuildTargets(raw_ninja: List[str], dir: str):
+def _printNiceDict(d: dict[str, Any]) -> str:
+    return "".join([f"  {k}: {v}\n" for k, v in d.items()])
+
+
     parser = NinjaParser()
     parser.parse(raw_ninja, dir)
 
     if len(parser.missing) != 0:
         logging.error(
-            f"Something is wrong there is {len(parser.missing)} missing dependencies: {parser.missing}"
+            f"Something is wrong there is {len(parser.missing)} missing dependencies:\n {_printNiceDict(parser.missing)}"
         )
         return
 
