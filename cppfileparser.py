@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from functools import wraps
 from typing import List
 
 
@@ -16,7 +17,17 @@ def parseIncludes(includes: str) -> List[str]:
     return set(matches)
 
 
-def findIncludes(name: str, includes: str) -> List[str]:
+cache = {}
+seen = set()
+
+
+def findIncludes(name: str, includes: str, parent: str = None) -> List[str]:
+    key = f"{name} {includes}"
+    # There is sometimes loop, as we don't really implement the #pragma once
+    # deal with it
+    if key in seen:
+        return []
+    seen.add(key)
     if includes is not None:
         includes_dirs = parseIncludes(includes)
     else:
@@ -58,5 +69,5 @@ def findIncludes(name: str, includes: str) -> List[str]:
                 ret.append(full_file_name)
                 ret.extend(findIncludes(full_file_name, includes))
                 break
-
+    cache[key] = ret
     return ret
