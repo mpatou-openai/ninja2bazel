@@ -222,9 +222,26 @@ class BuildTarget:
             return
         logging.debug(cmd)
 
+    def _handleCustomCommandForBazelGen(self, el: "BuildTarget", ctx: Dict[str, Any]):
+        # TODO need to specify the exec tool
+        # will filter the python / other stuff from the data files
+        ctx["producer"] = el.producedby
+        rule = el.producedby.rulename
+        c = rule.vars.get("command")
+        c2 = el.producedby._resolveName(c, ["in", "out", "TARGET_FILE"])
+        if c2 != c:
+            c = c2
+        t = BazelTarget("genrule", el.name)
+        ctx["bazelbuild"].bazelTargets.append(t)
+        if ctx["current"] is not None:
+            ctx["current"].addDep(t)
+        ctx["current"] = t
+
     def genBazel(self, bb: BazelBuild, rootdir: str):
         def visitor(el: "BuildTarget", ctx: Dict[str, Any]):
-            if el.producedby:
+            if el.producedby and el.producedby.rulename.name == "CUSTOM_COMMAND":
+                self._handleCustomCommandForBazelGen(el, ctx)
+            elif el.producedby and el.producedby.rulename.name != "phony":
                 ctx["producer"] = el.producedby
                 rule = el.producedby.rulename
                 c = rule.vars.get("command")
@@ -245,6 +262,12 @@ class BuildTarget:
                 if ctx.get("dest") is None:
                     print(el)
                 pass
+            elif el.type == TargetType.manually_generated:
+                self._handleManuallyGeneratedForBazelGen(el, ctx)
+
+            elif el.producedby and el.producedby.rulename.name == "CUSTOM_COMMAND":
+                print(f"Custom command {el.producedby.rulename} for {el}")
+            # Note deal with C/C++ files only here
             else:
                 assert ctx["dest"] is not None
                 logging.debug(ctx["producer"].vars)
