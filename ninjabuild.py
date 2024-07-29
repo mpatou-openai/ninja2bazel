@@ -32,13 +32,17 @@ TargetType = Enum(
 
 @total_ordering
 class BuildTarget:
-    def __init__(self, name: str):
+
+    def __init__(self, name: str, implicit: bool = False):
         self.name = name
+        self.implicit = implicit
         self.producedby: Optional["Build"] = None
         self.usedbybuilds: List["Build"] = []
         self.is_a_file = False
-        self.unknown_producer = False
-        self.headers = None
+        self.type = TargetType.other
+        self.headers: Optional[List[str]] = None
+        self.aliases: List[str] = []
+        self.external = False
 
     def __hash__(self) -> int:
         return self.name.__hash__()
@@ -71,7 +75,18 @@ class BuildTarget:
         return self.name
 
     def __cmp__(self, other) -> bool:
-        return self.name == other.name
+
+        if self.name == other.name:
+            return True
+        else:
+            for a in self.aliases:
+                if a == other.name:
+                    return True
+            for a in other.aliases:
+                if a == self.name:
+                    return True
+
+        return False
 
     def usedby(self, build: "Build") -> None:
         self.usedbybuilds.append(build)
