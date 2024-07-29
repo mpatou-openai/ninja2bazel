@@ -269,7 +269,11 @@ class BuildTarget:
                 print(f"Custom command {el.producedby.rulename} for {el}")
             # Note deal with C/C++ files only here
             else:
-                assert ctx["dest"] is not None
+                if not ctx.get("dest"):
+                    # It can happen that .o are not connected to a real library or binary but just
+                    # to phony targets in this case "dest" is NotImplemented
+                    # logging.warn(f"{el} is no connected to a non phony target")
+                    return
                 logging.debug(ctx["producer"].vars)
                 if el.name.endswith(".h") or el.name.endswith(".hpp"):
                     ctx["dest"].addHdr(el.name.replace(ctx["rootdir"], ""))
