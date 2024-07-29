@@ -7,7 +7,7 @@ from functools import total_ordering
 from typing import Any, Callable, Dict, List, Optional
 
 from bazel import BazelBuild, BazelTarget
-from cppfileparser import findAllHeaderFiles, findIncludes
+from cppfileparser import findIncludes
 
 IGNORED_STANZA = [
     "ninja_required_version",
