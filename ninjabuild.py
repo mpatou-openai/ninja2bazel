@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import sys
+from enum import Enum
 from functools import total_ordering
 from typing import Any, Callable, Dict, List, Optional
 
@@ -23,6 +24,10 @@ IGNORED_TARGETS = [
     "install/local",
     "install/strip",
 ]
+
+TargetType = Enum(
+    "TargetType", ["other", "unknown", "known", "external", "manually_generated"]
+)
 
 
 @total_ordering
@@ -47,11 +52,17 @@ class BuildTarget:
     def setHeadersFiles(self, files: List[str]):
         self.headers = files
 
+    def markAsManual(self):
+        self.type = TargetType.manually_generated
+
+    def markAsExternal(self):
+        self.type = TargetType.external
+
     def markAsUnknown(self):
-        self.unknown_producer = True
+        self.type = TargetType.unknown
 
     def markAsknown(self):
-        self.unknown_producer = False
+        self.type = TargetType.known
 
     def __repr__(self) -> str:
         return self.name
