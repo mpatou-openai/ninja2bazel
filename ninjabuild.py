@@ -144,15 +144,19 @@ class BuildTarget:
             and len(self.producedby.inputs) == 0
             and len(self.producedby.depends) == 0
         ):
-            visitor(self, ctx)
+            try:
+                visitor(self, ctx)
+            except Exception as e:
+                logging.error(f"Error visiting {self.name}: {e}")
+                raise
         if self.producedby:
-            for e in sorted(self.producedby.inputs):
+            for el in sorted(self.producedby.inputs):
                 newctx = ctx["setup_subcontext"](ctx)
-                e.visitGraph(visitor, newctx)
-            for e in sorted(self.producedby.depends):
-                if not e.depsAreVirtual():
+                el.visitGraph(visitor, newctx)
+            for el in sorted(self.producedby.depends):
+                if not el.depsAreVirtual():
                     newctx = ctx["setup_subcontext"](ctx)
-                    e.visitGraph(visitor, newctx)
+                    el.visitGraph(visitor, newctx)
 
     def printGraph(self, ident: int = 0, file=sys.stdout):
         def visitor(el: "BuildTarget", ctx: Dict[str, Any]):
