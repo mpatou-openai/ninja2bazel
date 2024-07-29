@@ -486,7 +486,7 @@ class NinjaParser:
         self.vars[name] = value
         logging.debug(f"Var {name} = {self.vars[name]}")
 
-    def handleInfclude(self, arr: List[str]):
+    def handleInclude(self, arr: List[str]):
         dir = self.directories[-1]
         filename = f"{dir}{os.path.sep}{arr[0]}"
         with open(filename, "r") as f:
@@ -496,11 +496,24 @@ class NinjaParser:
         self.parse(raw_ninja, cur_dir)
 
     def finalizeHeaders(self, current_dir: str):
+        def isCPPLikeFile(name: str) -> bool:
+            for e in [".cc", ".cpp", ".h", ".hpp"]:
+                if name.endswith(e):
+                    return True
+
+            return False
+
+        def isProtoLikeFile(name: str) -> bool:
+            for e in [".proto"]:
+                if name.endswith(e):
+                    return True
+            return False
+
         for t in self.all_outputs.values():
             if not t.producedby:
                 continue
             for i in t.producedby.inputs:
-                if i.is_a_file:
+                if i.is_a_file and isCPPLikeFile(i.name):
                     includes = t.producedby.vars.get("INCLUDES")
                     headers = findIncludes(i.name, includes)
                     i.setHeadersFiles(headers)
@@ -579,7 +592,7 @@ class NinjaParser:
                 continue
 
             if arr[0] == "include":
-                self.handleInfclude(arr[1:])
+                self.handleInclude(arr[1:])
                 continue
 
             logging.debug(f"{line} {len(line)}")
