@@ -245,7 +245,9 @@ class BuildTarget:
                 ctx["producer"] = el.producedby
                 rule = el.producedby.rulename
                 c = rule.vars.get("command")
-                assert c is not None
+                c2 = el.producedby._resolveName(c, ["in", "out", "TARGET_FILE"])
+                if c2 != c:
+                    c = c2
                 arr = c.split("&&")
                 found = False
                 for cmd in arr:
@@ -343,11 +345,28 @@ class Build:
             f"{self.rulename.name} => {' '.join([str(i) for i in self.outputs])}"
         )
 
+    def _resolveName(self, name: str, exceptVars: Optional[List[str]] = None) -> str:
+        regex = r"\$\{?([\w+]+)\}?"
+
+        def replacer(match: re.Match):
+            if exceptVars is not None and match.group(1) in exceptVars:
+                return f"${match.group(1)}"
+            if match.group(1) == "COMMAND":
+                print(f"{self.rulename.name} {name} {self.vars}")
+            v = self.vars.get(match.group(1))
+            if v is None:
+                v = f"${match.group(1)}"
+
+            return v
+
+        return re.sub(regex, replacer, name)
+
 
 class NinjaParser:
     def __init__(self):
         self.buildEdges = []
         self.currentBuild = None
+        self.currentVars = None
         self.currentRule = None
         self.buffer = []
         self.all_outputs = {}
@@ -357,26 +376,65 @@ class NinjaParser:
         self.rules["phony"] = Rule("phony")
         self.directories = []
         self.headers_files = {}
+        self.contexts = []
+
+    def setContext(self, contextName: str):
+        self.contexts.append(contextName)
+        self.currentContext = contextName
+        self.vars[contextName] = {}
+
+    def endContext(self, contextName: str):
+        assert self.contexts[-1] == contextName
+        self.contexts.pop()
+        if len(self.contexts):
+            self.currentContext = self.contexts[-1]
+        else:
+            self.currentContext = None
 
     def markDone(self):
         # What ever we had so far, we mark at finished
-        self.currentBuild = None
-        self.currentRule = None
+        if self.currentBuild is not None:
+            self._handleBuild(self.currentBuild, self.currentVars or {})
+            self.currentVars = {}
+            self.currentBuild = None
 
-    def _resolveName(self, name: str) -> str:
+        if self.currentRule is not None:
+            self._handleRule(self.currentRule, self.currentVars or {})
+            self.currentVars = {}
+            self.currentRule = None
+
+    def _resolveName(
+        self, name: str, additionalVars: Optional[Dict[str, str]] = None
+    ) -> str:
         regex = r"\$\{?([\w+]+)\}?"
 
         def replacer(match: re.Match):
-            return self.vars.get(match.group(1))
+            if additionalVars is not None:
+                v = additionalVars.get(match.group(1))
+            if v is None:
+                v = self.vars[self.currentContext].get(match.group(1))
+            if v is None:
+                v = match.group(1)
+
+            return v
 
         return re.sub(regex, replacer, name)
 
-    def _handleRule(self, arr: List[str]):
+    def _handleRule(self, arr: List[str], vars: Dict[str, str]):
         rule = Rule(arr[1])
         self.rules[rule.name] = rule
         self.currentRule = rule
+        rule.vars = vars
 
-    def _handleBuild(self, arr: List[str]):
+    def _handleBuild(self, arr: List[str], vars: Dict[str, str]):
+        """
+        Handle a build line materialized in the @arr list:
+        * First argument is 'build'
+        * the target the command to build it ie. phony or
+        CUSTOM_COMMAND
+        * dependencies until the end of the array or the element ||
+        * ordering only dependencies
+        """
         arr.pop(0)
         outputs: List[BuildTarget] = []
         implicit = False
@@ -478,13 +536,18 @@ class NinjaParser:
             logging.error(f"Coulnd't find a rule called {rulename}")
             return
         build = Build(outputs, rule, inputs, depends)
+        for k, v in self.vars[self.currentContext].items():
+            build.vars[k] = v
+
+        build.vars.update(build.rulename.vars)
+        build.vars.update(vars)
 
         self.currentBuild = build
         self.buildEdges.append(build)
 
     def handleVariable(self, name: str, value: str):
-        self.vars[name] = value
-        logging.debug(f"Var {name} = {self.vars[name]}")
+        self.vars[self.currentContext][name] = value
+        logging.debug(f"Var {name} = {self.vars[self.currentContext][name]}")
 
     def handleInclude(self, arr: List[str]):
         dir = self.directories[-1]
@@ -551,37 +614,31 @@ class NinjaParser:
                 self.markDone()
                 continue
 
-            arr = re.split(r" (?!\$)", line)
+            arr = re.split(r" (?!$)", line)
 
             if arr[0] == "rule":
-                self._handleRule(arr)
+                self.currentRule = arr
                 continue
 
             if arr[0] == "build":
-                self._handleBuild(arr)
+                self.currentBuild = arr
                 continue
 
             if line.startswith(" "):
-                where = None
-                resolv_vars = False
-
-                if self.currentBuild is not None:
-                    where = self.currentBuild
-                    resolv_vars = True
-
-                if self.currentRule is not None:
-                    where = self.currentRule
-
-                if where is not None:
-                    # TODO resolve vars with $
-                    v = line.split("=")
-                    key = v.pop(0)
-                    key = key.strip()
-                    value = "=".join(v)
-                    value.strip()
-                    where.vars[key] = value
-                else:
-                    logging.error(f'Don\'t know how to deal with this line "{line}"')
+                line = line.strip()
+                for i in range(len(line)):
+                    if (
+                        line[i] == "="
+                        and i > 1
+                        and line[i - 1] == " "
+                        and line[i - 2] != "$"
+                    ):
+                        key = line[:i].strip()
+                        value = line[i + 1 :].strip()
+                        if self.currentVars is None:
+                            self.currentVars = {}
+                        self.currentVars[key] = value
+                        break
                 continue
 
             if arr[0] in IGNORED_STANZA:
@@ -637,18 +694,21 @@ def _printNiceDict(d: dict[str, Any]) -> str:
 def getBuildTargets(
     raw_ninja: List[str],
     dir: str,
-    filename: str,
+    ninjaFileName: str,
     manually_generated: Optional[List[str]],
 ):
     parser = NinjaParser()
     parser.setManuallyGeneratedTargets(manually_generated)
+    parser.setContext(ninjaFileName)
     parser.parse(raw_ninja, dir)
+    # parser.inlinePhony()
+    parser.endContext(ninjaFileName)
 
     if len(parser.missing) != 0:
         logging.error(
             f"Something is wrong there is {len(parser.missing)} missing dependencies:\n {_printNiceDict(parser.missing)}"
         )
-        return
+        return []
 
     top_levels = getToplevels(parser)
     parser.finalizeHeaders(dir)
