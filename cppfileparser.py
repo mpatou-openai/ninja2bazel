@@ -13,7 +13,7 @@ def findAllHeaderFiles(current_dir: str) -> List[str]:
 
 
 def parseIncludes(includes: str) -> List[str]:
-    matches = re.findall(r"-I([^ ](?:[^ ]|(?: (?!(?:-I)|$)))+)", includes)
+    matches = re.findall(r"-I([^ ](?:[^ ]|(?: (?!(?:-I)|(?:-isystem)|$)))+)", includes)
     return set(matches)
 
 
