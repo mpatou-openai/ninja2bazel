@@ -179,20 +179,41 @@ class BuildTarget:
 
         self.visitGraph(visitor, ctx)
 
+    def _handleManuallyGeneratedForBazelGen(
+        self, el: "BuildTarget", ctx: Dict[str, Any]
+    ):
+        t = BazelTarget("manually_generated_fixme", el.name)
+        t.addSrc(el.name.replace(ctx["rootdir"], ""))
+        ctx["bazelbuild"].bazelTargets.append(t)
+        if ctx["current"] is not None:
+            ctx["current"].addDep(t)
+
     def _handleCmdForBazelGen(self, cmd: str, el: "BuildTarget", ctx: Dict[str, Any]):
-        if ("c++" in cmd or "g++" in cmd) and "$LINK_FLAGS" in cmd:
+        if (
+            "clang" in cmd
+            or "gcc" in cmd
+            or "clang++" in cmd
+            or "c++" in cmd
+            or "g++" in cmd
+        ) and "$LINK_FLAGS" in cmd:
             t = BazelTarget("cc_binary", el.name)
             ctx["bazelbuild"].bazelTargets.append(t)
             if ctx["current"] is not None:
                 ctx["current"].addDep(t)
             ctx["current"] = t
             return
-        if ("c++" in cmd or "g++" in cmd) and "-c" in cmd:
+        if (
+            "clang" in cmd
+            or "gcc" in cmd
+            or "clang++" in cmd
+            or "c++" in cmd
+            or "g++" in cmd
+        ) and "-c" in cmd:
             ctx["dest"] = ctx["current"]
             # compilation of a source file to an object file, this is taken care by
             # bazel targets like cc_binary or cc_library
             return
-        if "/ar " in cmd:
+        if "/ar " in cmd or "llvm-ar" in cmd:
             t = BazelTarget("cc_library", el.name)
             if ctx["current"] is not None:
                 ctx["current"].addDep(t)
@@ -430,6 +451,9 @@ class NinjaParser:
                     headers = findIncludes(i.name, includes)
                     i.setHeadersFiles(headers)
 
+    def setManuallyGeneratedTargets(self, manually_generated: Optional[List[str]]):
+        self.manually_generated = manually_generated or []
+
     def inlinePhony(self):
         for o in self.all_outputs.values():
             if o.producedby.rulename.name == "phony":
@@ -543,7 +567,14 @@ def _printNiceDict(d: dict[str, Any]) -> str:
     return "".join([f"  {k}: {v}\n" for k, v in d.items()])
 
 
+def getBuildTargets(
+    raw_ninja: List[str],
+    dir: str,
+    filename: str,
+    manually_generated: Optional[List[str]],
+):
     parser = NinjaParser()
+    parser.setManuallyGeneratedTargets(manually_generated)
     parser.parse(raw_ninja, dir)
 
     if len(parser.missing) != 0:
