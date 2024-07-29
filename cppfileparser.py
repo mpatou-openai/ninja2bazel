@@ -45,29 +45,37 @@ def findIncludes(name: str, includes: str, parent: str = None) -> List[str]:
         file = current_include[1:-1]
         if current_include.startswith('"'):
             full_file_name = f"{current_dir}/{file}"
-            if os.path.exists(full_file_name):
+            if os.path.exists(full_file_name) and not os.path.isdir(full_file_name):
                 logging.debug(f"Found {file} in the same directory as the looked file")
                 ret.append(full_file_name)
-                ret.extend(findIncludes(full_file_name, includes))
+                ret.extend(findIncludes(full_file_name, includes, name))
             else:
                 # file don't exists in the same directory, let's try to find one
                 # elsewhere
                 for d in includes_dirs:
-                    full_file_name = f"{current_dir}/{d}/{file}"
-                    if not os.path.exists(full_file_name):
+                    if d.startswith("/"):
+                        full_file_name = f"{d}/{file}"
+                    else:
+                        full_file_name = f"{current_dir}/{d}/{file}"
+                    if not os.path.exists(full_file_name) or os.path.isdir(
+                        full_file_name
+                    ):
                         continue
                     logging.debug(f"Found {file} in the includes variable")
                     ret.append(full_file_name)
-                    ret.extend(findIncludes(full_file_name, includes))
+                    ret.extend(findIncludes(full_file_name, includes, name))
                     break
         else:
             for d in includes_dirs:
-                full_file_name = f"{current_dir}/{d}/{file}"
-                if not os.path.exists(full_file_name):
+                if d.startswith("/"):
+                    full_file_name = f"{d}/{file}"
+                else:
+                    full_file_name = f"{current_dir}/{d}/{file}"
+                if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
                     continue
                 logging.debug(f"Found {file} in the includes variable")
                 ret.append(full_file_name)
-                ret.extend(findIncludes(full_file_name, includes))
+                ret.extend(findIncludes(full_file_name, includes, name))
                 break
     cache[key] = ret
     return ret
