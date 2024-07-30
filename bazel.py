@@ -1,10 +1,10 @@
 from functools import total_ordering
-from typing import List
+from typing import List, Set
 
 
 class BazelBuild:
     def __init__(self):
-        self.bazelTargets = []
+        self.bazelTargets: Set["BazelTarget"] = set()
 
     def genBazelBuildContent(self) -> str:
         content = []
@@ -15,7 +15,7 @@ class BazelBuild:
 
 
 @total_ordering
-class BazelTarget:
+class BazelTarget(object):
     def __init__(self, type: str, name: str):
         self.type = type
         self.name = name
@@ -23,7 +23,12 @@ class BazelTarget:
         self.hdrs: List[str] = []
         self.deps: List[BazelTarget] = []
 
-    def __eq__(self, other: "BazelTarget") -> bool:
+    def __hash__(self) -> int:
+        return hash(self.type + self.name)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BazelTarget):
+            return False
         return self.name == other.name
 
     def __lt__(self, other: "BazelTarget") -> bool:

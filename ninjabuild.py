@@ -2,12 +2,16 @@ import logging
 import os
 import re
 import sys
+from dataclasses import dataclass
 from enum import Enum
 from functools import total_ordering
 from typing import Any, Callable, Dict, List, Optional
 
 from bazel import BazelBuild, BazelTarget
 from cppfileparser import findIncludes
+
+VisitorType = Callable[["BuildTarget", "VisitorContext", bool], None]
+
 
 IGNORED_STANZA = [
     "ninja_required_version",
@@ -28,6 +32,38 @@ IGNORED_TARGETS = [
 TargetType = Enum(
     "TargetType", ["other", "unknown", "known", "external", "manually_generated"]
 )
+
+
+@dataclass
+class VisitorContext:
+    def setup_subcontext(self) -> "VisitorContext":
+        newCtx = BazelBuildVisitorContext(**self.__dict__)
+        return newCtx
+
+
+@dataclass
+class BazelBuildVisitorContext(VisitorContext):
+    rootdir: str = ""
+    bazelbuild: BazelBuild = None
+    current: Optional[BazelTarget] = None
+    dest: Optional[BazelTarget] = None
+    producer: Optional["Build"] = None
+
+    def setup_subcontext(self) -> "VisitorContext":
+        newCtx = BazelBuildVisitorContext(**self.__dict__)
+        return newCtx
+
+
+@dataclass
+class PrintVisitorContext(VisitorContext):
+    ident: int
+    output: Any
+
+    def setup_subcontext(self) -> "VisitorContext":
+        vals = [getattr(self, k) for k in dir(self) if not k.startswith("__")]
+        newCtx = PrintVisitorContext(*vals)
+        newCtx.ident += 1
+        return newCtx
 
 
 @total_ordering
@@ -134,11 +170,7 @@ class BuildTarget:
                 return False
         return False
 
-    def visitGraph(
-        self,
-        visitor: Callable[["BuildTarget", Dict[str, Any]], bool],
-        ctx: Dict[str, Any],
-    ):
+    def visitGraph(self, visitor: VisitorType, ctx: VisitorContext):
         # If we are visiting a target that is a file ord
         # a target that is produced by something that is either not phony
         # of is phony but has real inputs / deps
@@ -149,158 +181,42 @@ class BuildTarget:
             and len(self.producedby.depends) == 0
         ):
             try:
-                visitor(self, ctx)
+                visitor(self, ctx, False)
             except Exception as e:
                 logging.error(f"Error visiting {self.name}: {e}")
                 raise
         if self.producedby:
             for el in sorted(self.producedby.inputs):
-                newctx = ctx["setup_subcontext"](ctx)
+                newctx = ctx.setup_subcontext()
                 el.visitGraph(visitor, newctx)
             for el in sorted(self.producedby.depends):
                 if not el.depsAreVirtual():
-                    newctx = ctx["setup_subcontext"](ctx)
+                    newctx = ctx.setup_subcontext()
                     el.visitGraph(visitor, newctx)
 
     def printGraph(self, ident: int = 0, file=sys.stdout):
-        def visitor(el: "BuildTarget", ctx: Dict[str, Any]):
-            print(" " * ctx["ident"] + el.name)
+        def visitor(el: "BuildTarget", ctx: VisitorContext, _var: bool = False):
+            assert isinstance(ctx, PrintVisitorContext)
+            print(" " * ctx.ident + el.name)
 
-        def setup(ctx: Dict[str, Any]):
-            ctx2 = {k: v for k, v in ctx.items()}
-            ctx2["ident"] = ctx2["ident"] + 1
-            return ctx2
-
-        ctx = {
-            "ident": ident,
-            "output": file,
-            "setup_subcontext": setup,
-        }
+        ctx = PrintVisitorContext(ident, file)
 
         self.visitGraph(visitor, ctx)
 
-    def _handleManuallyGeneratedForBazelGen(
-        self, el: "BuildTarget", ctx: Dict[str, Any]
-    ):
-        t = BazelTarget("manually_generated_fixme", el.name)
-        t.addSrc(el.name.replace(ctx["rootdir"], ""))
-        ctx["bazelbuild"].bazelTargets.append(t)
-        if ctx["current"] is not None:
-            ctx["current"].addDep(t)
-
-    def _handleCmdForBazelGen(self, cmd: str, el: "BuildTarget", ctx: Dict[str, Any]):
-        if (
-            "clang" in cmd
-            or "gcc" in cmd
-            or "clang++" in cmd
-            or "c++" in cmd
-            or "g++" in cmd
-        ) and "$LINK_FLAGS" in cmd:
-            t = BazelTarget("cc_binary", el.name)
-            ctx["bazelbuild"].bazelTargets.append(t)
-            if ctx["current"] is not None:
-                ctx["current"].addDep(t)
-            ctx["current"] = t
-            return
-        if (
-            "clang" in cmd
-            or "gcc" in cmd
-            or "clang++" in cmd
-            or "c++" in cmd
-            or "g++" in cmd
-        ) and "-c" in cmd:
-            ctx["dest"] = ctx["current"]
-            # compilation of a source file to an object file, this is taken care by
-            # bazel targets like cc_binary or cc_library
-            return
-        if "/ar " in cmd or "llvm-ar" in cmd:
-            t = BazelTarget("cc_library", el.name)
-            if ctx["current"] is not None:
-                ctx["current"].addDep(t)
-            ctx["current"] = t
-            ctx["bazelbuild"].bazelTargets.append(t)
-            return
-        logging.debug(cmd)
-
-    def _handleCustomCommandForBazelGen(self, el: "BuildTarget", ctx: Dict[str, Any]):
-        # TODO need to specify the exec tool
-        # will filter the python / other stuff from the data files
-        ctx["producer"] = el.producedby
-        rule = el.producedby.rulename
-        c = rule.vars.get("command")
-        c2 = el.producedby._resolveName(c, ["in", "out", "TARGET_FILE"])
-        if c2 != c:
-            c = c2
-        t = BazelTarget("genrule", el.name)
-        ctx["bazelbuild"].bazelTargets.append(t)
-        if ctx["current"] is not None:
-            ctx["current"].addDep(t)
-        ctx["current"] = t
-
     def genBazel(self, bb: BazelBuild, rootdir: str):
-        def visitor(el: "BuildTarget", ctx: Dict[str, Any]):
-            if el.producedby and el.producedby.rulename.name == "CUSTOM_COMMAND":
-                self._handleCustomCommandForBazelGen(el, ctx)
-            elif el.producedby and el.producedby.rulename.name != "phony":
-                ctx["producer"] = el.producedby
-                rule = el.producedby.rulename
-                c = rule.vars.get("command")
-                c2 = el.producedby._resolveName(c, ["in", "out", "TARGET_FILE"])
-                if c2 != c:
-                    c = c2
-                arr = c.split("&&")
-                found = False
-                for cmd in arr:
-                    if "$in" in cmd and ("$out" in cmd or "$TARGET_FILE" in cmd):
-                        found = True
-                        break
-                if not found:
-                    logging.warning(f"{el} has no valid command {el.producedby.inputs}")
-                    logging.warning(f"Didn't find a valid command in {c}")
-                else:
-                    # Fixme split this to detect if it's a compiler or ar or something else
-                    self._handleCmdForBazelGen(cmd, el, ctx)
-            elif el.producedby and el.producedby.rulename.name == "phony":
-                if ctx.get("dest") is None:
-                    print(el)
-                pass
-            elif el.type == TargetType.manually_generated:
-                self._handleManuallyGeneratedForBazelGen(el, ctx)
-
-            elif el.producedby and el.producedby.rulename.name == "CUSTOM_COMMAND":
-                print(f"Custom command {el.producedby.rulename} for {el}")
-            # Note deal with C/C++ files only here
-            else:
-                if not ctx.get("dest"):
-                    # It can happen that .o are not connected to a real library or binary but just
-                    # to phony targets in this case "dest" is NotImplemented
-                    # logging.warn(f"{el} is no connected to a non phony target")
-                    return
-                logging.debug(ctx["producer"].vars)
-                if el.name.endswith(".h") or el.name.endswith(".hpp"):
-                    ctx["dest"].addHdr(el.name.replace(ctx["rootdir"], ""))
-                else:
-                    # Not produced aka it's a file
-                    # we have to parse the file and see if there is any includes
-                    # if it's a "" include then we look first in the path where the file is and then
-                    # in the path specified with -I
-                    ctx["dest"].addSrc(el.name.replace(ctx["rootdir"], ""))
-                    if not el.headers:
-                        print(f"Missing headers for {el}")
-                    for h in el.headers:
-                        ctx["dest"].addHdr(h.replace(ctx["rootdir"], ""))
 
         def setup(ctx):
             ctx2 = {k: v for k, v in ctx.items()}
             return ctx2
 
-        ctx: Dict[str, Any] = {"setup_subcontext": setup}
-        ctx["bazelbuild"] = bb
-        ctx["current"] = None
         if rootdir.endswith("/"):
-            ctx["rootdir"] = rootdir
+            dir = rootdir
         else:
-            ctx["rootdir"] = f"{rootdir}/"
+            dir = f"{rootdir}/"
+
+        ctx = BazelBuildVisitorContext(dir, bb)
+
+        visitor = BuildVisitor.getVisitor()
 
         self.visitGraph(visitor, ctx)
 
@@ -312,6 +228,70 @@ class Rule:
 
     def __repr__(self):
         return self.name
+
+
+class BuildVisitor:
+    @classmethod
+    def visitProduced(cls, el: "BuildTarget", ctx: BazelBuildVisitorContext):
+        assert el.producedby
+        if el.producedby.rulename.name != "phony":
+            ctx.producer = el.producedby
+            rule = el.producedby.rulename
+            c = rule.vars.get("command")
+            assert c is not None
+            c2 = el.producedby._resolveName(c, ["in", "out", "TARGET_FILE"])
+            if c2 != c:
+                c = c2
+            arr = c.split("&&")
+            found = False
+            for cmd in arr:
+                if "$in" in cmd and ("$out" in cmd or "$TARGET_FILE" in cmd):
+                    found = True
+                    break
+            if not found and el.producedby.rulename.name != "CUSTOM_COMMAND":
+                logging.warning(f"{el} has no valid command {el.producedby.inputs}")
+                logging.warning(f"Didn't find a valid command in {c}")
+                return
+            # Fixme split this to detect if it's a compiler or ar or something else
+            Build.handleRuleProducedForBazelGen(el, cmd, ctx)
+        elif el.producedby.rulename.name == "phony":
+            Build.handlePhonyForBazelGen(el, ctx)
+        elif el.type == TargetType.manually_generated:
+            Build.handleManuallyGeneratedForBazelGen(el, ctx)
+
+    @classmethod
+    def visitFile(cls, el: "BuildTarget", ctx: BazelBuildVisitorContext):
+        if not ctx.dest:
+            # It can happen that .o are not connected to a real library or binary but just
+            # to phony targets in this case "dest" is NotImplemented
+            # logging.warn(f"{el} is no connected to a non phony target")
+            return
+        if el.name.endswith(".h") or el.name.endswith(".hpp"):
+            ctx.dest.addHdr(el.name.replace(ctx.rootdir, ""))
+        else:
+            # Not produced aka it's a file
+            # we have to parse the file and see if there is any includes
+            # if it's a "" include then we look first in the path where the file is and then
+            # in the path specified with -I
+            ctx.dest.addSrc(el.name.replace(ctx.rootdir, ""))
+            if el.headers is None:
+                if el.type != TargetType.manually_generated:
+                    logging.warn(f"Missing headers for {el} {el.type} {el.producedby}")
+                return
+            for h in el.headers:
+                ctx.dest.addHdr(h.replace(ctx.rootdir, ""))
+
+    @classmethod
+    def getVisitor(cls) -> VisitorType:
+        def visitor(el: "BuildTarget", ctx: VisitorContext, _var: bool = False):
+            assert isinstance(ctx, BazelBuildVisitorContext)
+            if el.producedby is not None:
+                return BuildVisitor.visitProduced(el, ctx)
+            # Note deal with C/C++ files only here
+            else:
+                return Build.handleFileForBazelGen(el, ctx)
+
+        return visitor
 
 
 class Build:
@@ -338,6 +318,109 @@ class Build:
 
         self.vars: Dict[str, str] = {}
 
+    @classmethod
+    def handleFileForBazelGen(
+        cls,
+        el: "BuildTarget",
+        ctx: BazelBuildVisitorContext,
+    ):
+        if not ctx.dest:
+            # It can happen that .o are not connected to a real library or binary but just
+            # to phony targets in this case "dest" is NotImplemented
+            # logging.warn(f"{el} is no connected to a non phony target")
+            return
+        if el.name.endswith(".h") or el.name.endswith(".hpp"):
+            ctx.dest.addHdr(el.name.replace(ctx.rootdir, ""))
+        else:
+            # Not produced aka it's a file
+            # we have to parse the file and see if there is any includes
+            # if it's a "" include then we look first in the path where the file is and then
+            # in the path specified with -I
+            ctx.dest.addSrc(el.name.replace(ctx.rootdir, ""))
+            if el.headers is None:
+                return
+            for h in el.headers:
+                ctx.dest.addHdr(h.replace(ctx.rootdir, ""))
+
+    @classmethod
+    def handleManuallyGeneratedForBazelGen(
+        cls, el: "BuildTarget", ctx: BazelBuildVisitorContext
+    ):
+        t = BazelTarget("manually_generated_fixme", el.name)
+        t.addSrc(el.name.replace(ctx.rootdir, ""))
+        ctx.bazelbuild.bazelTargets.add(t)
+        if ctx.current is not None:
+            ctx.current.addDep(t)
+
+    @classmethod
+    def handlePhonyForBazelGen(cls, el: "BuildTarget", ctx: BazelBuildVisitorContext):
+        if ctx.dest is None:
+            logging.debug(f"{el} is a phony target")
+
+    @classmethod
+    def isCPPCommand(cls, cmd: str) -> bool:
+        if (
+            "clang" in cmd
+            or "gcc" in cmd
+            or "clang++" in cmd
+            or "c++" in cmd
+            or "g++" in cmd
+        ):
+            return True
+        else:
+            return False
+
+    @classmethod
+    def isStaticArchiveCommand(cls, cmd: str) -> bool:
+        if "/ar " in cmd or "llvm-ar" in cmd:
+            return True
+        else:
+            return False
+
+    @classmethod
+    def _handleCustomCommandForBazelGen(
+        cls, el: "BuildTarget", ctx: BazelBuildVisitorContext, cmd: str
+    ):
+        print("custom command")
+        # TODO need to specify the exec tool
+        # will filter the python / other stuff from the data files
+        pass
+
+    @classmethod
+    def _handleCPPLinkCommand(
+        cls, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
+    ):
+        t = BazelTarget("cc_binary", el.name)
+        ctx.bazelbuild.bazelTargets.add(t)
+        if ctx.current is not None:
+            ctx.current.addDep(t)
+        ctx.current = t
+        return
+
+    @classmethod
+    def handleRuleProducedForBazelGen(
+        cls, el: "BuildTarget", cmd: str, ctx: BazelBuildVisitorContext
+    ):
+        assert el.producedby is not None
+        if cls.isCPPCommand(cmd) and "$LINK_FLAGS" in cmd:
+            cls._handleCPPLinkCommand(el, cmd, ctx)
+            return
+        if cls.isCPPCommand(cmd) and "-c" in cmd:
+            ctx.dest = ctx.current
+            # compilation of a source file to an object file, this is taken care by
+            # bazel targets like cc_binary or cc_library
+            return
+        if cls.isStaticArchiveCommand(cmd):
+            t = BazelTarget("cc_library", el.name)
+            if ctx.current is not None:
+                ctx.current.addDep(t)
+            ctx.current = t
+            ctx.bazelbuild.bazelTargets.add(t)
+            return
+        if el.producedby.rulename.name == "CUSTOM_COMMAND":
+            return cls._handleCustomCommandForBazelGen(el, ctx, cmd)
+        logging.debug(cmd)
+
     def __repr__(self) -> str:
         return (
             f"{' '.join([str(i) for i in self.inputs])} + "
@@ -351,8 +434,8 @@ class Build:
         def replacer(match: re.Match):
             if exceptVars is not None and match.group(1) in exceptVars:
                 return f"${match.group(1)}"
-            if match.group(1) == "COMMAND":
-                print(f"{self.rulename.name} {name} {self.vars}")
+            # if match.group(1) == "COMMAND":
+            # print(f"{self.rulename.name} {name} {self.vars}")
             v = self.vars.get(match.group(1))
             if v is None:
                 v = f"${match.group(1)}"
@@ -377,6 +460,7 @@ class NinjaParser:
         self.directories = []
         self.headers_files = {}
         self.contexts = []
+        self.currentContext = None
 
     def setContext(self, contextName: str):
         self.contexts.append(contextName)
@@ -583,11 +667,6 @@ class NinjaParser:
 
     def setManuallyGeneratedTargets(self, manually_generated: Optional[List[str]]):
         self.manually_generated = manually_generated or []
-
-    def inlinePhony(self):
-        for o in self.all_outputs.values():
-            if o.producedby.rulename.name == "phony":
-                print(f"{o} produced by {o.producedby.rulename}")
 
     def parse(
         self,
