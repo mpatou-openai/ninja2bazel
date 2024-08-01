@@ -35,7 +35,7 @@ def main():
     cur_dir = os.path.dirname(os.path.abspath(filename))
     logging.info("Parising ninja file and buildTargets")
     top_levels_targets = getBuildTargets(
-        raw_ninja, cur_dir, filename, manually_generated
+        raw_ninja, cur_dir, filename, manually_generated, rootdir
     )
     logging.info("Generating Bazel BUILD files from buildTargets")
     output = genBazelBuildFiles(top_levels_targets, rootdir)

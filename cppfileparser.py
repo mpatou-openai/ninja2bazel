@@ -1,18 +1,17 @@
 import logging
 import os
 import re
-from functools import wraps
-from typing import List
+from typing import Generator, List, Optional, Set
 
 
-def findAllHeaderFiles(current_dir: str) -> List[str]:
+def findAllHeaderFiles(current_dir: str) -> Generator[str, None, None]:
     for dirpath, dirname, files in os.walk(current_dir):
         for f in files:
             if f.endswith(".h") or f.endswith(".hpp"):
                 yield (f"{dirpath}/{f}")
 
 
-def parseIncludes(includes: str) -> List[str]:
+def parseIncludes(includes: str) -> Set[str]:
     matches = re.findall(r"-I([^ ](?:[^ ]|(?: (?!(?:-I)|(?:-isystem)|$)))+)", includes)
     return set(matches)
 
@@ -21,7 +20,7 @@ cache = {}
 seen = set()
 
 
-def findIncludes(name: str, includes: str, parent: str = None) -> List[str]:
+def findIncludes(name: str, includes: str, parent: Optional[str] = None) -> List[str]:
     key = f"{name} {includes}"
     # There is sometimes loop, as we don't really implement the #pragma once
     # deal with it
