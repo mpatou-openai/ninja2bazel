@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from bazel import (BaseBazelTarget, BazelBuild, BazelGenRuleTarget,
                    BazelTarget, PyBinaryBazelTarget)
-from cppfileparser import findIncludes
+from cppfileparser import findCPPIncludes
 
 VisitorType = Callable[["BuildTarget", "VisitorContext", bool], None]
 
@@ -77,19 +77,81 @@ class PrintVisitorContext(VisitorContext):
         return newCtx
 
 
+class BuildFileGroupingStrategy:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        base = cls.__bases__[0]
+        if base == object:
+            base = cls
+
+        if base._instance is None:
+            base._instance = super(BuildFileGroupingStrategy, cls).__new__(cls)
+        return base._instance
+
+    def __init__(self, prefixDirectory: str = ""):
+        if not hasattr(self, "initialized"):  # To prevent reinitialization
+            self.prefixDirectory = prefixDirectory
+            self.initialized = True
+
+    def strategyName(self):
+        return "default"
+
+    def getBuildTarget(self, filename: str, parentTarget: str, produced=False) -> str:
+        raise NotImplementedError
+
+
+class TopLevelGroupingStrategy(BuildFileGroupingStrategy):
+    def __init__(self, prefixDirectory: str = ""):
+        super().__init__(prefixDirectory)
+
+    def strategyName(self):
+        return "TopLevelGroupingStrategy"
+
+    def getBuildFilenamePath(self, filename: str) -> str:
+        pathElements = filename.split(os.path.sep)
+        if len(pathElements) <= 1:
+            return ""
+        else:
+            return pathElements[0]
+
+    def getBuildTarget(
+        self, filename: str, parentTargetPath: str, produced=False
+    ) -> str:
+        if parentTargetPath == "":
+            parentTargetPath = self.prefixDirectory
+        pathElements = filename.split(os.path.sep)
+        prefix = ""
+        if produced:
+            prefix = ":"
+        if len(pathElements) <= 1:
+            return f"{prefix}{pathElements[0]}"
+        else:
+            if filename.startswith(parentTargetPath) and len(parentTargetPath):
+                return f"{prefix}{os.path.sep.join(pathElements[1:])}"
+            else:
+                # Different directory -> always return full path
+                return f"//{pathElements[0]}:{os.path.sep.join(pathElements[1:])}"
+
+
 @total_ordering
 class BuildTarget:
 
-    def __init__(self, name: str, implicit: bool = False):
+    def __init__(
+        self,
+        name: str,
+        shortName: str,
+        implicit: bool = False,
+    ):
         self.name = name
+        self.shortName = shortName
         self.implicit = implicit
         self.producedby: Optional["Build"] = None
         self.usedbybuilds: List["Build"] = []
         self.is_a_file = False
         self.type = TargetType.other
-        self.headers: Optional[List[str]] = None
+        self.includes: Optional[List[str]] = None
         self.aliases: List[str] = []
-        self.external = False
 
     def __hash__(self) -> int:
         return self.name.__hash__()
@@ -104,8 +166,8 @@ class BuildTarget:
     def __lt__(self, other) -> bool:
         return self.name < other.name
 
-    def setHeadersFiles(self, files: List[str]):
-        self.headers = files
+    def setIncludedFiles(self, files: List[str]):
+        self.includes = files
 
     def markAsManual(self):
         self.type = TargetType.manually_generated
@@ -247,6 +309,10 @@ class BuildTarget:
         self.visitGraph(visitor, ctx)
 
 
+class GeneratedBuildTarget(BuildTarget):
+    pass
+
+
 class Rule:
     def __init__(self, name: str):
         self.name = name
@@ -345,7 +411,11 @@ class Build:
             return
         if el.name.endswith(".h") or el.name.endswith(".hpp"):
             if isinstance(ctx.dest, BazelTarget):
-                ctx.dest.addHdr(el.name.replace(ctx.rootdir, ""))
+                ctx.dest.addHdr(
+                    BuildFileGroupingStrategy().getBuildTarget(
+                        el.shortName, ctx.dest.location
+                    )
+                )
             else:
                 logging.warn(
                     f"{el} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
@@ -357,12 +427,20 @@ class Build:
             # we have to parse the file and see if there is any includes
             # if it's a "" include then we look first in the path where the file is and then
             # in the path specified with -I
-            ctx.dest.addSrc(el.name.replace(ctx.rootdir, ""))
-            if el.headers is None:
+            ctx.dest.addSrc(
+                BuildFileGroupingStrategy().getBuildTarget(
+                    el.shortName, ctx.dest.location
+                )
+            )
+            if el.includes is None:
                 return
-            for h in el.headers:
+            for h in el.includes:
                 if isinstance(ctx.dest, BazelTarget):
-                    ctx.dest.addHdr(h.replace(ctx.rootdir, ""))
+                    ctx.dest.addHdr(
+                        BuildFileGroupingStrategy().getBuildTarget(
+                            el.shortName, ctx.dest.location
+                        )
+                    )
                 else:
                     logging.warn(
                         f"{el} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
@@ -372,9 +450,18 @@ class Build:
     def handleManuallyGeneratedForBazelGen(
         cls, el: "BuildTarget", ctx: BazelBuildVisitorContext
     ):
-        t = BazelTarget("manually_generated_fixme", el.name)
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        t = BazelTarget("manually_generated_fixme", el.name, location)
         logging.info(f"handleManuallyGeneratedForBazelGen for {el.name}")
-        t.addSrc(el.name.replace(ctx.rootdir, ""))
+        if ctx.current is not None:
+            parentPath = ctx.current.location
+        else:
+            parentPath = ""
+        t.addSrc(
+            BuildFileGroupingStrategy().getBuildTarget(
+                el.shortName, parentPath, produced=True
+            )
+        )
         ctx.bazelbuild.bazelTargets.add(t)
         if ctx.current is not None:
             ctx.current.addDep(t)
@@ -410,11 +497,11 @@ class Build:
     ):
         assert el.producedby is not None
         if el.producedby.associatedBazelTarget is None:
-            name = el.name.replace(
-                el.producedby.vars.get("cmake_ninja_workdir", ""), ""
-            ).replace("/", "_")
+            name = el.shortName.replace("/", "_").replace(".", "_")
 
-            genTarget = BazelGenRuleTarget(f"{name}_command")
+            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+            genTarget = BazelGenRuleTarget(f"{name}_command", location)
+
             allInputs: List[str] = []
             regex = f"^{ctx.rootdir}/?"
             for i in el.producedby.inputs:
@@ -426,17 +513,24 @@ class Build:
             for i in el.producedby.outputs:
                 cmdCopy = cmdCopy.replace(i.name, "")
             arr: List[str] = list(filter(lambda x: x != "", cmdCopy.split(" ")))
+
             for e in arr[1:]:
                 if e in el.producedby.inputs:
                     genTarget.addSrc(e)
+
             for elm in el.producedby.outputs:
                 genTarget.addOut(
-                    elm.name.replace(
-                        el.producedby.vars.get("cmake_ninja_workdir", ""), ""
-                    )
+                    elm.shortName,
+                    TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName) + "/",
                 )
+            logging.info(
+                f"Current build path for target: {TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)}"
+            )
+            # We don't need to handle the replacement of prefix and whatnot bazel seems to be able
+            # to handle it
+            cmd = cmd.replace(el.producedby.vars.get("cmake_ninja_workdir", ""), "")
             if arr[0].endswith(".py"):
-                cmdTarget = PyBinaryBazelTarget(f"{name}_cmd_py")
+                cmdTarget = PyBinaryBazelTarget(f"{name}_cmd_py", location)
                 cmdTarget.main = arr[0]
                 ctx.bazelbuild.bazelTargets.add(cmdTarget)
                 genTarget.cmd = (
@@ -456,7 +550,8 @@ class Build:
             genTarget = tmp
 
         outs = genTarget.getOutputs(
-            el.name.replace(el.producedby.vars.get("cmake_ninja_workdir", ""), "")
+            el.shortName,
+            TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName) + "/",
         )
         for t in outs:
             if ctx.dest is not None:
@@ -480,15 +575,22 @@ class Build:
         cls, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
     ):
         assert el.producedby is not None
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
         if el.producedby.associatedBazelTarget is None:
             if el.producedby.vars.get("SONAME") is not None:
-                staticLibTarget = BazelTarget("cc_library", el.name)
-                t = BazelTarget("cc_shared_library", el.name)
+                staticLibTarget = BazelTarget(
+                    "cc_library", "inner_" + el.shortName.replace("/", "_"), location
+                )
+                staticLibTarget.addPrefixIfRequired = False
+                t = BazelTarget(
+                    "cc_shared_library", el.shortName.replace("/", "_"), location
+                )
+                t.addPrefixIfRequired = False
                 t.addDep(staticLibTarget)
                 ctx.bazelbuild.bazelTargets.add(staticLibTarget)
                 nextCurrent = staticLibTarget
             else:
-                t = BazelTarget("cc_binary", el.name)
+                t = BazelTarget("cc_binary", el.name, location)
                 nextCurrent = t
             ctx.bazelbuild.bazelTargets.add(t)
             el.producedby.setAssociatedBazelTarget(t)
@@ -524,7 +626,8 @@ class Build:
             return
         if cls.isStaticArchiveCommand(cmd):
             assert len(el.producedby.outputs) == 1
-            t = BazelTarget("cc_library", el.name)
+            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+            t = BazelTarget("cc_library", el.name, location)
             if ctx.current is not None:
                 ctx.current.addDep(t)
             ctx.current = t
@@ -557,22 +660,45 @@ class Build:
 
 
 class NinjaParser:
-    def __init__(self, codeRootDir):
+    def __init__(self, codeRootDir: str):
         self.codeRootDir = codeRootDir
-        self.buildEdges = []
-        self.currentBuild = None
-        self.currentVars = None
-        self.currentRule = None
-        self.buffer = []
-        self.all_outputs = {}
-        self.missing = {}
-        self.vars = {}
+        self.buildEdges: List[Build] = []
+        self.currentBuild: Optional[List[str]] = None
+        self.currentVars: Optional[Dict[str, str]] = None
+        self.currentRule: Optional[List[str]] = None
+        self.buffer: List[str] = []
+        self.all_outputs: Dict[str, BuildTarget] = {}
+        self.missing: Dict[str, Any] = {}
+        self.vars: Dict[str, Dict[str, str]] = {}
         self.rules = {}
         self.rules["phony"] = Rule("phony")
-        self.directories = []
-        self.headers_files = {}
-        self.contexts = []
-        self.currentContext = None
+        self.directories: List[str] = []
+        self.headers_files: Dict[str, Any] = {}
+        self.contexts: List[str] = []
+        self.currentContext: str = ""
+        self.initialDirectory = ""
+
+    def getShortName(self, name):
+        if name.startswith(self.codeRootDir):
+            return name[len(self.codeRootDir) :]
+        s = self.vars[self.currentContext].get("cmake_ninja_workdir", "")
+        # Actually this seems to be not such a good idea after all
+        if len(s) > 0 and name.startswith(s):
+            offset = len(s)
+            if not s.endswith(os.path.sep):
+                offset += 1
+            ret = f"{self.initialDirectory}{name[offset:]}"
+            # logging.info(f"shortName: {s} {ret} {name}")
+            return ret
+        if self.initialDirectory != "" and name[0] != os.path.sep:
+            ret = f"{self.initialDirectory}{name}"
+            # logging.info(f"shortName: {self.initialDirectory} {ret}")
+            return ret
+        # logging.info(f"shortName: {name} (default)")
+        return name
+
+    def setDirectoryPrefix(self, initialDirectoryPrefix: str):
+        self.initialDirectory = initialDirectoryPrefix
 
     def setContext(self, contextName: str):
         self.contexts.append(contextName)
@@ -585,7 +711,7 @@ class NinjaParser:
         if len(self.contexts):
             self.currentContext = self.contexts[-1]
         else:
-            self.currentContext = None
+            self.currentContext = ""
 
     def markDone(self):
         # What ever we had so far, we mark at finished
@@ -619,7 +745,6 @@ class NinjaParser:
     def _handleRule(self, arr: List[str], vars: Dict[str, str]):
         rule = Rule(arr[1])
         self.rules[rule.name] = rule
-        self.currentRule = rule
         rule.vars = vars
 
     def _handleBuild(self, arr: List[str], vars: Dict[str, str]):
@@ -649,12 +774,22 @@ class NinjaParser:
             if e.endswith(":"):
                 shouldbreak = True
                 val = e[:-1]
-            val = self._resolveName(val, vars)
+            tmp = self._resolveName(val, vars)
+            # logging.info(f"Adding {val} as an output, resolved as {tmp}")
+            val = tmp
 
-            outputs.append(BuildTarget(val, implicit))
+            outputs.append(
+                BuildTarget(
+                    val,
+                    self.getShortName(val),
+                    implicit,
+                )
+            )
             if shouldbreak:
                 break
 
+        # Would be a better idea to associate generated target with a prefix that is based of the
+        # prefix of its inputs
         i += 1
         rulename = arr[i]
         i += 1
@@ -695,22 +830,22 @@ class NinjaParser:
                     or realPath.startswith(self.codeRootDir)
                 ):
                     logging.info(f"Marking {s} as an known dependency")
-                    inputs.append(BuildTarget(s).markAsFile())
+                    inputs.append(BuildTarget(s, self.getShortName(s)).markAsFile())
                 else:
                     logging.info(f"Marking {s} as an external dependency")
-                    inputs.append(BuildTarget(s).markAsExternal())
+                    inputs.append(BuildTarget(s, self.getShortName(s)).markAsExternal())
             # Massive hack: assume that files ending with .c/cc with a folder name third-party
             # exists
             elif (p.endswith(".c") or p.endswith(".cc") or p.endswith(".cpp")) and (
                 "third-party" in p
             ):
-                inputs.append(BuildTarget(s).markAsFile())
+                inputs.append(BuildTarget(s, self.getShortName(s)).markAsFile())
             else:
                 v = self.all_outputs.get(s)
                 if not v:
-                    v = BuildTarget(s)
+                    v = BuildTarget(s, self.getShortName(s))
                     if s in self.manually_generated:
-                        v = BuildTarget(s)
+                        v = BuildTarget(s, self.getShortName(s))
                         v.markAsManual()
                     else:
                         v.markAsUnknown()
@@ -720,9 +855,8 @@ class NinjaParser:
         depends = []
         for d in raw_depends:
             v = self.all_outputs.get(d)
-            logging.info(f"pouet {d}")
             if not v:
-                v = BuildTarget(d)
+                v = BuildTarget(d, self.getShortName(s))
                 v.markAsExternal()
             depends.append(v)
 
@@ -748,13 +882,12 @@ class NinjaParser:
             logging.error(f"Coulnd't find a rule called {rulename}")
             return
         build = Build(outputs, rule, inputs, depends)
-        for k, v in self.vars[self.currentContext].items():
-            build.vars[k] = v
+        for k2, v2 in self.vars[self.currentContext].items():
+            build.vars[k2] = v2
 
         build.vars.update(build.rulename.vars)
         build.vars.update(vars)
 
-        self.currentBuild = build
         self.buildEdges.append(build)
 
     def handleVariable(self, name: str, value: str):
@@ -789,9 +922,11 @@ class NinjaParser:
                 continue
             for i in t.producedby.inputs:
                 if i.is_a_file and isCPPLikeFile(i.name):
-                    includes = t.producedby.vars.get("INCLUDES")
-                    headers = findIncludes(i.name, includes)
-                    i.setHeadersFiles(headers)
+                    includes = t.producedby.vars.get("INCLUDES", "")
+                    headers = findCPPIncludes(i.name, includes)
+                    i.setIncludedFiles(headers)
+                if i.is_a_file and isProtoLikeFile(i.name):
+                    pass
 
     def setManuallyGeneratedTargets(self, manually_generated: Optional[List[str]]):
         self.manually_generated = manually_generated or []
@@ -904,10 +1039,13 @@ def getBuildTargets(
     ninjaFileName: str,
     manuallyGenerated: Optional[List[str]],
     codeRootDir: str,
+    directoryPrefix: str,
 ) -> List[BuildTarget]:
     parser = NinjaParser(codeRootDir)
     parser.setManuallyGeneratedTargets(manuallyGenerated)
     parser.setContext(ninjaFileName)
+    parser.setDirectoryPrefix(directoryPrefix)
+    TopLevelGroupingStrategy(directoryPrefix)
     parser.parse(raw_ninja, dir)
     parser.endContext(ninjaFileName)
 
