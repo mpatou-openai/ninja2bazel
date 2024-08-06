@@ -20,7 +20,9 @@ cache = {}
 seen = set()
 
 
-def findIncludes(name: str, includes: str, parent: Optional[str] = None) -> List[str]:
+def findCPPIncludes(
+    name: str, includes: str, parent: Optional[str] = None
+) -> List[str]:
     key = f"{name} {includes}"
     # There is sometimes loop, as we don't really implement the #pragma once
     # deal with it
@@ -32,7 +34,7 @@ def findIncludes(name: str, includes: str, parent: Optional[str] = None) -> List
     else:
         includes_dirs = []
     current_dir = os.path.dirname(os.path.abspath(name))
-    logging.debug(f"Handling findIncludes {name}")
+    logging.debug(f"Handling findCPPIncludes {name}")
     with open(name, "r") as f:
         content = f.readlines()
     ret = []
@@ -47,7 +49,7 @@ def findIncludes(name: str, includes: str, parent: Optional[str] = None) -> List
             if os.path.exists(full_file_name) and not os.path.isdir(full_file_name):
                 logging.debug(f"Found {file} in the same directory as the looked file")
                 ret.append(full_file_name)
-                ret.extend(findIncludes(full_file_name, includes, name))
+                ret.extend(findCPPIncludes(full_file_name, includes, name))
             else:
                 # file don't exists in the same directory, let's try to find one
                 # elsewhere
@@ -62,7 +64,7 @@ def findIncludes(name: str, includes: str, parent: Optional[str] = None) -> List
                         continue
                     logging.debug(f"Found {file} in the includes variable")
                     ret.append(full_file_name)
-                    ret.extend(findIncludes(full_file_name, includes, name))
+                    ret.extend(findCPPIncludes(full_file_name, includes, name))
                     break
         else:
             for d in includes_dirs:
@@ -74,7 +76,7 @@ def findIncludes(name: str, includes: str, parent: Optional[str] = None) -> List
                     continue
                 logging.debug(f"Found {file} in the includes variable")
                 ret.append(full_file_name)
-                ret.extend(findIncludes(full_file_name, includes, name))
+                ret.extend(findCPPIncludes(full_file_name, includes, name))
                 break
     cache[key] = ret
     return ret

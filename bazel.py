@@ -1,7 +1,7 @@
 import logging
 import re
 from functools import total_ordering
-from typing import List, Set
+from typing import List, Optional, Set
 
 
 class BazelBuild:
@@ -21,12 +21,10 @@ class BazelBuild:
 
 @total_ordering
 class BaseBazelTarget(object):
-    def __init__(self, type: str, name: str):
+    def __init__(self, type: str, name: str, location: str):
         self.type = type
         self.name = name
-        # location of the target with in the WORKSPACE
-        # FIXME
-        self.location = "//"
+        self.location = location
 
     def __hash__(self) -> int:
         return hash(self.type + self.name)
@@ -54,19 +52,20 @@ class BaseBazelTarget(object):
 
 @total_ordering
 class BazelTarget(BaseBazelTarget):
-    def __init__(self, type: str, name: str):
-        super().__init__(type, name)
+    def __init__(self, type: str, name: str, location: str):
+        super().__init__(type, name, location)
         self.srcs: set[str] = set()
         self.hdrs: set[str] = set()
         self.deps: set[BaseBazelTarget] = set()
+        self.addPrefixIfRequired: bool = True
         # logging.info(f"Created BazelTarget {name}/{type}")
 
     def targetName(self) -> str:
         return self.depName()
 
     def depName(self):
-        if self.type == "cc_library":
-            if not self.name.startswith("lib"):
+        if self.type == "cc_library" or self.type == "cc_shared_library":
+            if not self.name.startswith("lib") and self.addPrefixIfRequired:
                 name = f"lib{self.name}"
             else:
                 name = self.name
@@ -135,7 +134,8 @@ class BazelTarget(BaseBazelTarget):
         if len(self.deps) > 0:
             ret.append("    deps = [")
             for d in sorted(self.deps):
-                ret.append(f'        ":{d.targetName()}",')
+                pathPrefix = f"//{d.location}" if d.location != self.location else ""
+                ret.append(f'        "{pathPrefix}:{d.targetName()}",')
             ret.append("    ],")
         ret.append(")")
 
@@ -143,8 +143,8 @@ class BazelTarget(BaseBazelTarget):
 
 
 class BazelGenRuleTarget(BaseBazelTarget):
-    def __init__(self, name: str):
-        super().__init__("genrule", name)
+    def __init__(self, name: str, location: str):
+        super().__init__("genrule", name, location)
         self.cmd = ""
         self.outs: set[str] = set()
         self.srcs: set[str] = set()
@@ -154,7 +154,9 @@ class BazelGenRuleTarget(BaseBazelTarget):
     def addSrc(self, filename: str):
         self.srcs.add(filename)
 
-    def addOut(self, target: str):
+    def addOut(self, target: str, stripedPrefix: Optional[str] = None):
+        if stripedPrefix:
+            target = target.replace(stripedPrefix, "")
         self.outs.add(target)
 
     def addTool(self, target: BaseBazelTarget):
@@ -178,7 +180,7 @@ class BazelGenRuleTarget(BaseBazelTarget):
         if len(self.tools) > 0:
             ret.append("    tools= [")
             for d in sorted(self.tools):
-                pathPrefix = d.location if d.location != self.location else ""
+                pathPrefix = f"//{d.location}" if d.location != self.location else ""
                 ret.append(f'        "{pathPrefix}:{d.targetName()}",')
             ret.append("    ],")
         ret.append(f'    cmd = "{self.cmd}",')
@@ -186,7 +188,11 @@ class BazelGenRuleTarget(BaseBazelTarget):
 
         return ret
 
-    def getOutputs(self, name: str) -> List["BazelGenRuleTargetOutput"]:
+    def getOutputs(
+        self, name: str, stripedPrefix: Optional[str] = None
+    ) -> List["BazelGenRuleTargetOutput"]:
+        if stripedPrefix:
+            name = name.replace(stripedPrefix, "")
         if name not in self.outs:
             raise ValueError(f"Output {name} didn't exists on genrule {self.name}")
         regex = r"(.*)\.[h|cc|cpp|hpp|c]"
@@ -194,14 +200,19 @@ class BazelGenRuleTarget(BaseBazelTarget):
         if match:
             namePrefix = match.group(1)
             names = [v for v in self.outs if v.startswith(namePrefix)]
-            return [BazelGenRuleTargetOutput(n, self) for n in names]
+            return [BazelGenRuleTargetOutput(n, self.location, self) for n in names]
         else:
-            return [BazelGenRuleTargetOutput(name, self)]
+            return [BazelGenRuleTargetOutput(name, self.location, self)]
 
 
 class BazelGenRuleTargetOutput(BaseBazelTarget):
-    def __init__(self, name: str, genrule: BazelGenRuleTarget):
-        super().__init__("genrule_output", f"{genrule.targetName()}_{name}")
+    def __init__(
+        self,
+        name: str,
+        location: str,
+        genrule: BazelGenRuleTarget,
+    ):
+        super().__init__("genrule_output", f"{genrule.targetName()}_{name}", location)
         self.rule = genrule
         self.name = name
 
@@ -213,8 +224,8 @@ class BazelGenRuleTargetOutput(BaseBazelTarget):
 
 
 class PyBinaryBazelTarget(BaseBazelTarget):
-    def __init__(self, name: str):
-        super().__init__("py_binary", name)
+    def __init__(self, name: str, location: str):
+        super().__init__("py_binary", name, location)
         self.main = ""
         self.srcs: set[str] = set()
         self.data: set[str] = set()
