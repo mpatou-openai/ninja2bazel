@@ -7,8 +7,10 @@ from enum import Enum
 from functools import total_ordering
 from typing import Any, Callable, Dict, List, Optional
 
-from bazel import (BaseBazelTarget, BazelBuild, BazelGenRuleTarget,
-                   BazelTarget, PyBinaryBazelTarget)
+from bazel import (BaseBazelTarget, BazelBuild, BazelCCProtoLibrary,
+                   BazelGenRuleTarget, BazelGRPCCCProtoLibrary,
+                   BazelProtoLibrary, BazelTarget, ExportedFile,
+                   PyBinaryBazelTarget)
 from cppfileparser import findCPPIncludes
 
 VisitorType = Callable[["BuildTarget", "VisitorContext", bool], None]
@@ -53,6 +55,7 @@ class BazelBuildVisitorContext(VisitorContext):
     dest: Optional[BaseBazelTarget] = None
     producer: Optional["Build"] = None
     next_dest: Optional[BaseBazelTarget] = None
+    next_current: Optional[BaseBazelTarget] = None
 
     def setup_subcontext(self) -> "VisitorContext":
         newCtx = BazelBuildVisitorContext(**self.__dict__)
@@ -98,6 +101,9 @@ class BuildFileGroupingStrategy:
         return "default"
 
     def getBuildTarget(self, filename: str, parentTarget: str, produced=False) -> str:
+        raise NotImplementedError
+
+    def getBuildFilenamePath(self, filename: str) -> str:
         raise NotImplementedError
 
 
@@ -324,22 +330,31 @@ class Rule:
 
 class BuildVisitor:
     @classmethod
-    def visitProduced(cls, el: "BuildTarget", ctx: BazelBuildVisitorContext):
-        assert el.producedby
-        if el.producedby.rulename.name != "phony":
-            ctx.producer = el.producedby
-            rule = el.producedby.rulename
+    def visitProduced(
+        cls,
+        ctx: BazelBuildVisitorContext,
+        el: "BuildTarget",
+        build: "Build",
+    ):
+        if build.rulename.name != "phony":
+            if len(el.usedbybuilds) == 0:
+                logging.warning(
+                    f"Skipping non phony top level target that is not used by anything: {el}"
+                )
+                return
+            ctx.producer = build
+            rule = build.rulename
             c = rule.vars.get("command")
             assert c is not None
-            c2 = el.producedby._resolveName(c, ["in", "out", "TARGET_FILE"])
+            c2 = build._resolveName(c, ["in", "out", "TARGET_FILE"])
             if c2 != c:
                 c = c2
             arr = c.split("&&")
             found = False
 
             for cmd in arr:
-                if el.producedby.rulename.name == "CUSTOM_COMMAND":
-                    for fin in el.producedby.inputs:
+                if build.rulename.name == "CUSTOM_COMMAND":
+                    for fin in build.inputs:
                         if fin.is_a_file:
                             if fin.name in cmd:
                                 found = True
@@ -347,22 +362,23 @@ class BuildVisitor:
                 if "$in" in cmd and ("$out" in cmd or "$TARGET_FILE" in cmd):
                     found = True
                     break
-            if not found and el.producedby.rulename.name != "CUSTOM_COMMAND":
-                logging.warning(f"{el} has no valid command {el.producedby.inputs}")
+            if not found and build.rulename.name != "CUSTOM_COMMAND":
+                logging.warning(f"{el} has no valid command {build.inputs}")
                 logging.warning(f"Didn't find a valid command in {c}")
                 return
-            Build.handleRuleProducedForBazelGen(el, cmd, ctx)
-        elif el.producedby.rulename.name == "phony":
-            Build.handlePhonyForBazelGen(el, ctx)
+            build.handleRuleProducedForBazelGen(ctx, el, cmd)
+        elif build.rulename.name == "phony":
+            build.handlePhonyForBazelGen(ctx, el, build)
         elif el.type == TargetType.manually_generated:
-            Build.handleManuallyGeneratedForBazelGen(el, ctx)
+            build.handleManuallyGeneratedForBazelGen(ctx, el, build)
 
     @classmethod
     def getVisitor(cls) -> VisitorType:
         def visitor(el: "BuildTarget", ctx: VisitorContext, _var: bool = False):
             assert isinstance(ctx, BazelBuildVisitorContext)
             if el.producedby is not None:
-                return BuildVisitor.visitProduced(el, ctx)
+                build = el.producedby
+                return BuildVisitor.visitProduced(ctx, el, build)
             # Note deal with C/C++ files only here
             else:
                 return Build.handleFileForBazelGen(el, ctx)
@@ -371,6 +387,8 @@ class BuildVisitor:
 
 
 class Build:
+    staticFiles: Dict[str, ExportedFile] = {}
+
     def __init__(
         self: "Build",
         outputs: List[BuildTarget],
@@ -399,6 +417,18 @@ class Build:
         self.associatedBazelTarget = t
 
     @classmethod
+    def _genExportedFile(cls, filename: str, location: str) -> ExportedFile:
+        ef = cls.staticFiles.get(filename)
+        if not ef:
+            fileLocation = BuildFileGroupingStrategy().getBuildFilenamePath(filename)
+            ef = ExportedFile(
+                BuildFileGroupingStrategy().getBuildTarget(filename, location),
+                fileLocation,
+            )
+            cls.staticFiles[filename] = ef
+        return ef
+
+    @classmethod
     def handleFileForBazelGen(
         cls,
         el: "BuildTarget",
@@ -411,11 +441,7 @@ class Build:
             return
         if el.name.endswith(".h") or el.name.endswith(".hpp"):
             if isinstance(ctx.dest, BazelTarget):
-                ctx.dest.addHdr(
-                    BuildFileGroupingStrategy().getBuildTarget(
-                        el.shortName, ctx.dest.location
-                    )
-                )
+                ctx.dest.addHdr(cls._genExportedFile(el.shortName, ctx.dest.location))
             else:
                 logging.warn(
                     f"{el} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
@@ -427,18 +453,14 @@ class Build:
             # we have to parse the file and see if there is any includes
             # if it's a "" include then we look first in the path where the file is and then
             # in the path specified with -I
-            ctx.dest.addSrc(
-                BuildFileGroupingStrategy().getBuildTarget(
-                    el.shortName, ctx.dest.location
-                )
-            )
+            ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
             if el.includes is None:
                 return
             for h in el.includes:
                 if isinstance(ctx.dest, BazelTarget):
                     ctx.dest.addHdr(
-                        BuildFileGroupingStrategy().getBuildTarget(
-                            el.shortName, ctx.dest.location
+                        ctx.dest.addHdr(
+                            cls._genExportedFile(el.shortName, ctx.dest.location)
                         )
                     )
                 else:
@@ -448,26 +470,20 @@ class Build:
 
     @classmethod
     def handleManuallyGeneratedForBazelGen(
-        cls, el: "BuildTarget", ctx: BazelBuildVisitorContext
+        cls, ctx: BazelBuildVisitorContext, el: "BuildTarget", build: "Build"
     ):
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
         t = BazelTarget("manually_generated_fixme", el.name, location)
         logging.info(f"handleManuallyGeneratedForBazelGen for {el.name}")
-        if ctx.current is not None:
-            parentPath = ctx.current.location
-        else:
-            parentPath = ""
-        t.addSrc(
-            BuildFileGroupingStrategy().getBuildTarget(
-                el.shortName, parentPath, produced=True
-            )
-        )
+        ctx.dest = t
         ctx.bazelbuild.bazelTargets.add(t)
         if ctx.current is not None:
             ctx.current.addDep(t)
 
     @classmethod
-    def handlePhonyForBazelGen(cls, el: "BuildTarget", ctx: BazelBuildVisitorContext):
+    def handlePhonyForBazelGen(
+        cls, ctx: BazelBuildVisitorContext, el: "BuildTarget", build: "Build"
+    ):
         if ctx.dest is None:
             logging.debug(f"{el} is a phony target")
 
@@ -491,12 +507,44 @@ class Build:
         else:
             return False
 
-    @classmethod
-    def _handleCustomCommandForBazelGen(
-        cls, el: "BuildTarget", ctx: BazelBuildVisitorContext, cmd: str
+    def _handleProtobufForBazelGen(
+        self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
     ):
-        assert el.producedby is not None
-        if el.producedby.associatedBazelTarget is None:
+        assert ctx.current is not None or ctx.dest is not None
+        if self.associatedBazelTarget is None:
+            arr = el.name.split(os.path.sep)
+            filename = arr[-1]
+            # TODO use negative forward looking
+            regex = r"([^.]*)(?:\.grpc)?\.pb\.(?:cc|h)"
+            match = re.match(regex, filename)
+            if not match:
+                logging.info("not a match")
+                return
+            proto = match.group(1)
+            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+            t = BazelProtoLibrary(f"{proto}_proto", location)
+            ctx.bazelbuild.bazelTargets.add(t)
+            self.setAssociatedBazelTarget(t)
+            if ctx.dest is not None:
+                ctx.dest.addSrc(t)
+            elif ctx.current is not None:
+                ctx.current.addDep(t)
+            ctx.dest = t
+            ctx.next_dest = t
+
+        else:
+            tmp = self.associatedBazelTarget
+            if ctx.dest is not None:
+                ctx.dest.addSrc(tmp)
+            elif ctx.current is not None:
+                ctx.current.addDep(tmp)
+            ctx.dest = tmp
+            ctx.next_dest = tmp
+
+    def _handleCustomCommandForBazelGen(
+        self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
+    ):
+        if self.associatedBazelTarget is None:
             name = el.shortName.replace("/", "_").replace(".", "_")
 
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
@@ -504,31 +552,30 @@ class Build:
 
             allInputs: List[str] = []
             regex = f"^{ctx.rootdir}/?"
-            for i in el.producedby.inputs:
+            for i in self.inputs:
                 allInputs.append(re.sub(regex, "", i.name))
             regex = f"{ctx.rootdir}/?"
             cmd = re.sub(regex, "", cmd)
             logging.info(f"Handling custom command {cmd}")
             cmdCopy = cmd
-            for i in el.producedby.outputs:
+            for i in self.outputs:
                 cmdCopy = cmdCopy.replace(i.name, "")
             arr: List[str] = list(filter(lambda x: x != "", cmdCopy.split(" ")))
 
             for e in arr[1:]:
-                if e in el.producedby.inputs:
-                    genTarget.addSrc(e)
+                if e in self.inputs:
+                    genTarget.addSrc(self._genExportedFile(e, genTarget.location))
 
-            for elm in el.producedby.outputs:
+            for elm in self.outputs:
                 genTarget.addOut(
                     elm.shortName,
-                    TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName) + "/",
                 )
             logging.info(
                 f"Current build path for target: {TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)}"
             )
             # We don't need to handle the replacement of prefix and whatnot bazel seems to be able
             # to handle it
-            cmd = cmd.replace(el.producedby.vars.get("cmake_ninja_workdir", ""), "")
+            cmd = cmd.replace(self.vars.get("cmake_ninja_workdir", ""), "")
             if arr[0].endswith(".py"):
                 cmdTarget = PyBinaryBazelTarget(f"{name}_cmd_py", location)
                 cmdTarget.main = arr[0]
@@ -539,13 +586,13 @@ class Build:
                 genTarget.addTool(cmdTarget)
                 for e in allInputs:
                     if e.endswith(".py"):
-                        cmdTarget.addSrc(e)
+                        cmdTarget.addSrc(self._genExportedFile(e, genTarget.location))
             else:
                 genTarget.cmd = cmd.strip()
             ctx.bazelbuild.bazelTargets.add(genTarget)
-            el.producedby.setAssociatedBazelTarget(genTarget)
+            self.setAssociatedBazelTarget(genTarget)
         else:
-            tmp = el.producedby.associatedBazelTarget
+            tmp = self.associatedBazelTarget
             assert isinstance(tmp, BazelGenRuleTarget)
             genTarget = tmp
 
@@ -557,27 +604,67 @@ class Build:
             if ctx.dest is not None:
                 if t.name.endswith(".h"):
                     assert isinstance(ctx.dest, BazelTarget)
-                    ctx.dest.addHdr(t.targetName())
+                    ctx.dest.addHdr(t)
                 if (
                     t.name.endswith(".c")
                     or t.name.endswith(".cc")
                     or t.name.endswith(".cpp")
                 ):
-                    ctx.dest.addSrc(t.targetName())
+                    ctx.dest.addSrc(t)
             elif ctx.current is not None:
                 logging.warn(f"No dest for custom command: {el}")
                 [ctx.current.addDep(o) for o in outs]
         ctx.next_dest = genTarget
         ctx.current = genTarget
 
-    @classmethod
+    def _handleGRPCCCProtobuf(self, ctx: BazelBuildVisitorContext, el: BuildTarget):
+        assert ctx.current is not None
+        if self.associatedBazelTarget is None:
+            arr = el.name.split(os.path.sep)
+            filename = arr[-1]
+            proto = filename.replace(".grpc.pb.cc.o", "")
+
+            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+            t = BazelGRPCCCProtoLibrary(f"{proto}_cc_grpc", location)
+            ctx.current.addDep(t)
+            ctx.bazelbuild.bazelTargets.add(t)
+            self.setAssociatedBazelTarget(t)
+            for tgt in ctx.bazelbuild.bazelTargets:
+                if tgt.name == f"{proto}_cc_proto":
+                    t.addDep(tgt)
+            ctx.next_dest = t
+            ctx.dest = t
+        else:
+            ctx.current.addDep(self.associatedBazelTarget)
+            ctx.next_dest = self.associatedBazelTarget
+            ctx.dest = self.associatedBazelTarget
+
+    def _handleCCProtobuf(self, ctx: BazelBuildVisitorContext, el: BuildTarget):
+        assert ctx.current is not None
+        if self.associatedBazelTarget is None:
+            arr = el.name.split(os.path.sep)
+            filename = arr[-1]
+            proto = filename.replace(".pb.cc.o", "")
+
+            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+            t = BazelCCProtoLibrary(f"{proto}_cc_proto", location)
+            ctx.current.addDep(t)
+            ctx.bazelbuild.bazelTargets.add(t)
+            self.setAssociatedBazelTarget(t)
+            for tgt in ctx.bazelbuild.bazelTargets:
+                if tgt.name == f"{proto}_cc_grpc":
+                    tgt.addDep(t)
+            ctx.next_current = t
+            ctx.current = t
+        else:
+            ctx.current.addDep(self.associatedBazelTarget)
+
     def _handleCPPLinkCommand(
-        cls, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
+        self, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
     ):
-        assert el.producedby is not None
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-        if el.producedby.associatedBazelTarget is None:
-            if el.producedby.vars.get("SONAME") is not None:
+        if self.associatedBazelTarget is None:
+            if self.vars.get("SONAME") is not None:
                 staticLibTarget = BazelTarget(
                     "cc_library", "inner_" + el.shortName.replace("/", "_"), location
                 )
@@ -593,9 +680,9 @@ class Build:
                 t = BazelTarget("cc_binary", el.name, location)
                 nextCurrent = t
             ctx.bazelbuild.bazelTargets.add(t)
-            el.producedby.setAssociatedBazelTarget(t)
+            self.setAssociatedBazelTarget(t)
         else:
-            tmp = el.producedby.associatedBazelTarget
+            tmp = self.associatedBazelTarget
             assert isinstance(tmp, BazelTarget)
             t = tmp
             if t.type == "cc_shared_library":
@@ -608,24 +695,36 @@ class Build:
         ctx.current = nextCurrent
         return
 
-    @classmethod
     def handleRuleProducedForBazelGen(
-        cls, el: "BuildTarget", cmd: str, ctx: BazelBuildVisitorContext
+        self,
+        ctx: BazelBuildVisitorContext,
+        el: "BuildTarget",
+        cmd: str,
     ):
-        assert el.producedby is not None
-        if el.producedby.rulename.name == "CUSTOM_COMMAND":
-            return cls._handleCustomCommandForBazelGen(el, ctx, cmd)
-        if cls.isCPPCommand(cmd) and el.producedby.vars.get("LINK_FLAGS") is not None:
-            cls._handleCPPLinkCommand(el, cmd, ctx)
+
+        if self.rulename.name == "CUSTOM_COMMAND" and "bin/protoc" in self.vars.get(
+            "COMMAND", ""
+        ):
+            return self._handleProtobufForBazelGen(ctx, el, cmd)
+        if self.rulename.name == "CUSTOM_COMMAND":
+            return self._handleCustomCommandForBazelGen(ctx, el, cmd)
+        if self.isCPPCommand(cmd) and self.vars.get("LINK_FLAGS") is not None:
+            self._handleCPPLinkCommand(el, cmd, ctx)
             return
-        if cls.isCPPCommand(cmd) and "-c" in cmd:
-            assert len(el.producedby.outputs) == 1
-            ctx.dest = ctx.current
-            # compilation of a source file to an object file, this is taken care by
-            # bazel targets like cc_binary or cc_library
+        if self.isCPPCommand(cmd) and "-c" in cmd:
+            assert len(self.outputs) == 1
+            if ".grpc.pb.cc.o" in self.outputs[0].name:
+                self._handleGRPCCCProtobuf(ctx, el)
+            elif ".pb.cc.o" in self.outputs[0].name:
+                # protobuf
+                self._handleCCProtobuf(ctx, el)
+            else:
+                ctx.dest = ctx.current
+                # compilation of a source file to an object file, this is taken care by
+                # bazel targets like cc_binary or cc_library
             return
-        if cls.isStaticArchiveCommand(cmd):
-            assert len(el.producedby.outputs) == 1
+        if self.isStaticArchiveCommand(cmd):
+            assert len(self.outputs) == 1
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
             t = BazelTarget("cc_library", el.name, location)
             if ctx.current is not None:
@@ -682,19 +781,17 @@ class NinjaParser:
         if name.startswith(self.codeRootDir):
             return name[len(self.codeRootDir) :]
         s = self.vars[self.currentContext].get("cmake_ninja_workdir", "")
-        # Actually this seems to be not such a good idea after all
+
+        # TODO find a way to for generated files to figure out the best prefix
         if len(s) > 0 and name.startswith(s):
             offset = len(s)
             if not s.endswith(os.path.sep):
                 offset += 1
             ret = f"{self.initialDirectory}{name[offset:]}"
-            # logging.info(f"shortName: {s} {ret} {name}")
             return ret
         if self.initialDirectory != "" and name[0] != os.path.sep:
             ret = f"{self.initialDirectory}{name}"
-            # logging.info(f"shortName: {self.initialDirectory} {ret}")
             return ret
-        # logging.info(f"shortName: {name} (default)")
         return name
 
     def setDirectoryPrefix(self, initialDirectoryPrefix: str):
@@ -1022,7 +1119,7 @@ def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
             and not o.implicit
             and not str(o).endswith("_tests.cmake")
         ):
-            logging.error(f"{o} used by no one")
+            logging.warning(f"{o} used by no one")
             # logging.debug(f"{o} produced by {o.producedby.rulename.name}")
             real_top_targets.append(o)
 
