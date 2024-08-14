@@ -1,21 +1,43 @@
 import logging
 import os
 import re
-import sys
+from dataclasses import dataclass
 from enum import Enum
 from functools import total_ordering
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from bazel import (BaseBazelTarget, BazelBuild, BazelCCProtoLibrary,
                    BazelGenRuleTarget, BazelGRPCCCProtoLibrary,
                    BazelProtoLibrary, BazelTarget, ExportedFile,
                    PyBinaryBazelTarget)
-from visitor import (BazelBuildVisitorContext, BuildVisitor,
-                     PrintVisitorContext, VisitorContext, VisitorType)
+from visitor import VisitorContext
 
+VisitorType = Callable[["BuildTarget", "VisitorContext", bool], None]
 TargetType = Enum(
     "TargetType", ["other", "unknown", "known", "external", "manually_generated"]
 )
+
+
+@dataclass
+class BazelBuildVisitorContext(VisitorContext):
+    rootdir: str
+    bazelbuild: BazelBuild
+    current: Optional[BaseBazelTarget] = None
+    dest: Optional[BaseBazelTarget] = None
+    producer: Optional["Build"] = None
+    next_dest: Optional[BaseBazelTarget] = None
+    next_current: Optional[BaseBazelTarget] = None
+
+    def setup_subcontext(self) -> "VisitorContext":
+        newCtx = BazelBuildVisitorContext(**self.__dict__)
+        # Never copy the next desitnation from the parent context
+        newCtx.next_dest = None
+        if self.next_dest is not None:
+            newCtx.dest = self.next_dest
+        return newCtx
+
+    def cleanup(self):
+        self.next_dest = None
 
 
 class BuildFileGroupingStrategy:
@@ -38,7 +60,7 @@ class BuildFileGroupingStrategy:
     def strategyName(self):
         return "default"
 
-    def getBuildTarget(self, filename: str, parentTarget: str, produced=False) -> str:
+    def getBuildTarget(self, filename: str, parentTarget: str, keepPrefix=False) -> str:
         raise NotImplementedError
 
     def getBuildFilenamePath(self, filename: str) -> str:
@@ -60,22 +82,25 @@ class TopLevelGroupingStrategy(BuildFileGroupingStrategy):
             return pathElements[0]
 
     def getBuildTarget(
-        self, filename: str, parentTargetPath: str, produced=False
+        self, filename: str, parentTargetPath: str, keepPrefix=False
     ) -> str:
         if parentTargetPath == "":
             parentTargetPath = self.prefixDirectory
         pathElements = filename.split(os.path.sep)
-        prefix = ""
-        if produced:
-            prefix = ":"
+        prefix = ":"
         if len(pathElements) <= 1:
             return f"{prefix}{pathElements[0]}"
         else:
             if filename.startswith(parentTargetPath) and len(parentTargetPath):
                 return f"{prefix}{os.path.sep.join(pathElements[1:])}"
             else:
+                if keepPrefix:
+                    idx = 0
+                else:
+                    idx = 1
                 # Different directory -> always return full path
-                return f"//{pathElements[0]}:{os.path.sep.join(pathElements[1:])}"
+                v = f":{os.path.sep.join(pathElements[idx:])}"
+                return v
 
 
 @total_ordering
@@ -94,7 +119,7 @@ class BuildTarget:
         self.usedbybuilds: List["Build"] = []
         self.is_a_file = False
         self.type = TargetType.other
-        self.includes: Optional[List[str]] = None
+        self.includes: Optional[List[Tuple[str, str]]] = None
         self.aliases: List[str] = []
 
     def __hash__(self) -> int:
@@ -110,7 +135,7 @@ class BuildTarget:
     def __lt__(self, other) -> bool:
         return self.name < other.name
 
-    def setIncludedFiles(self, files: List[str]):
+    def setIncludedFiles(self, files: List[Tuple[str, str]]):
         self.includes = files
 
     def markAsManual(self):
@@ -225,33 +250,6 @@ class BuildTarget:
         # call cleanup() to clean the context once a node has been visited
         ctx.cleanup()
 
-    def printGraph(self, ident: int = 0, file=sys.stdout):
-        def visitor(el: "BuildTarget", ctx: VisitorContext, _var: bool = False):
-            assert isinstance(ctx, PrintVisitorContext)
-            print(" " * ctx.ident + el.name)
-            if el.producedby is None:
-                return
-            for d in el.producedby.depends:
-                if d.producedby is None and d.type == TargetType.external:
-                    print(" " * (ctx.ident + 1) + f"  {d.name} (external)")
-
-        ctx = PrintVisitorContext(ident, file)
-
-        self.visitGraph(visitor, ctx)
-
-    def genBazel(self, bb: BazelBuild, rootdir: str):
-
-        if rootdir.endswith("/"):
-            dir = rootdir
-        else:
-            dir = f"{rootdir}/"
-
-        ctx = BazelBuildVisitorContext(dir, bb)
-
-        visitor = BuildVisitor.getVisitor()
-
-        self.visitGraph(visitor, ctx)
-
 
 class GeneratedBuildTarget(BuildTarget):
     pass
@@ -268,6 +266,7 @@ class Rule:
 
 class Build:
     staticFiles: Dict[str, ExportedFile] = {}
+    remapPaths: Dict[str, str] = {}
 
     def __init__(
         self: "Build",
@@ -297,12 +296,32 @@ class Build:
         self.associatedBazelTarget = t
 
     @classmethod
-    def _genExportedFile(cls, filename: str, location: str) -> ExportedFile:
+    def setRemapPaths(cls, remapPaths: Dict[str, str]):
+        cls.remapPaths = remapPaths
+
+    @classmethod
+    def _genExportedFile(
+        cls,
+        filename: str,
+        locationCaller: str,
+        fileLocation: Optional[str] = None,
+    ) -> ExportedFile:
         ef = cls.staticFiles.get(filename)
         if not ef:
-            fileLocation = BuildFileGroupingStrategy().getBuildFilenamePath(filename)
+            keepPrefix = False
+            if fileLocation is None:
+                fileLocation = BuildFileGroupingStrategy().getBuildFilenamePath(
+                    filename
+                )
+            else:
+                keepPrefix = True
+            for k, v in cls.remapPaths.items():
+                if fileLocation.startswith(k):
+                    fileLocation = fileLocation.replace(k, v)
             ef = ExportedFile(
-                BuildFileGroupingStrategy().getBuildTarget(filename, location),
+                BuildFileGroupingStrategy().getBuildTarget(
+                    filename, locationCaller, keepPrefix
+                ),
                 fileLocation,
             )
             cls.staticFiles[filename] = ef
@@ -326,6 +345,20 @@ class Build:
                 logging.warn(
                     f"{el} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
                 )
+        elif el.name.endswith(".proto") and el.includes is not None:
+            ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
+
+            if len(el.includes) == 0:
+                return
+            t = BazelProtoLibrary(f"sub_{ctx.dest.name}", ctx.dest.location)
+            ctx.bazelbuild.bazelTargets.add(t)
+            ctx.dest.addDep(t)
+            for i, d in el.includes:
+                t.addSrc(
+                    cls._genExportedFile(f"{d}{os.path.sep}{i}", ctx.dest.location)
+                )
+                stripPrefix = d.replace(ctx.dest.location + os.path.sep, "")
+                t.stripImportPrefix = stripPrefix
         else:
             if el.type == TargetType.external:
                 return
@@ -336,16 +369,17 @@ class Build:
             ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
             if el.includes is None:
                 return
-            for h in el.includes:
+            for i, d in el.includes:
                 if isinstance(ctx.dest, BazelTarget):
+                    # FIXME !!! this is wrong the name of the generated file that we create
                     ctx.dest.addHdr(
                         ctx.dest.addHdr(
-                            cls._genExportedFile(el.shortName, ctx.dest.location)
+                            ctx.dest.addSrc(cls._genExportedFile(i, ctx.dest.location))
                         )
                     )
                 else:
                     logging.warn(
-                        f"{el} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
+                        f"{i} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
                     )
 
     @classmethod
