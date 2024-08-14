@@ -19,6 +19,11 @@ def main():
         help="Manually generated dependencies",
     )
     parser.add_argument(
+        "--remap",
+        action="append",
+        help="Which path  are remopped to which path",
+    )
+    parser.add_argument(
         "-p",
         "--prefix",
         default="",
@@ -52,8 +57,13 @@ def main():
     logging.info("Parising ninja file and buildTargets")
     if not rootdir.endswith(os.path.sep):
         rootdir = f"{rootdir}{os.path.sep}"
+    remap = {}
+    for e in args.remap:
+        (fromPath, toPath) = e.split("=")
+        remap[fromPath] = toPath
+
     top_levels_targets = getBuildTargets(
-        raw_ninja, cur_dir, filename, manually_generated, rootdir, prefix
+        raw_ninja, cur_dir, filename, manually_generated, rootdir, prefix, remap
     )
     logging.info("Generating Bazel BUILD files from buildTargets")
     output = genBazelBuildFiles(top_levels_targets, rootdir)

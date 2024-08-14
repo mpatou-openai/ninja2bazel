@@ -1,11 +1,17 @@
 import logging
 import os
 import re
+import sys
 from typing import Any, Dict, List, Optional
 
 from bazel import BazelBuild
-from build import Build, BuildTarget, Rule, TopLevelGroupingStrategy
+from build import (Build, BuildTarget, Rule, TargetType,
+                   TopLevelGroupingStrategy)
+from build_visitor import (BazelBuildVisitorContext, BuildVisitor,
+                           PrintVisitorContext)
 from cppfileparser import findCPPIncludes
+from protoparser import findProtoIncludes
+from visitor import VisitorContext
 
 IGNORED_STANZA = [
     "ninja_required_version",
@@ -43,7 +49,10 @@ class NinjaParser:
         self.currentContext: str = ""
         self.initialDirectory = ""
 
-    def getShortName(self, name):
+    def getShortName(
+        self,
+        name,
+    ):
         if name.startswith(self.codeRootDir):
             return name[len(self.codeRootDir) :]
         s = self.vars[self.currentContext].get("cmake_ninja_workdir", "")
@@ -67,6 +76,10 @@ class NinjaParser:
         self.contexts.append(contextName)
         self.currentContext = contextName
         self.vars[contextName] = {}
+
+    def setRemapPath(self, remapPaths: Dict[str, str]):
+        self.remapPaths = remapPaths
+        Build.setRemapPaths(remapPaths)
 
     def endContext(self, contextName: str):
         assert self.contexts[-1] == contextName
@@ -287,9 +300,24 @@ class NinjaParser:
                 if i.is_a_file and isCPPLikeFile(i.name):
                     includes = t.producedby.vars.get("INCLUDES", "")
                     headers = findCPPIncludes(i.name, includes)
-                    i.setIncludedFiles(headers)
+                    i.setIncludedFiles([self.getShortName(h) for h in headers])
                 if i.is_a_file and isProtoLikeFile(i.name):
-                    pass
+                    includes_dirs: List[str] = []
+                    for part in t.producedby.vars.get("COMMAND", "").split("&&"):
+                        if "/protoc" in part:
+                            regex = r"-I ([^ ]+)"
+                            matches = re.findall(regex, part)
+                            includes_dirs.extend(matches)
+
+                    protos = findProtoIncludes(i.name, includes_dirs)
+                    includesFiles = []
+                    # TODO put everything in a proto library
+                    for p in protos:
+                        f = self.getShortName(p[0])
+                        d = self.getShortName(p[1])
+                        f = f.replace(d + os.path.sep, "")
+                        includesFiles.append((f, d))
+                    i.setIncludedFiles(includesFiles)
 
     def setManuallyGeneratedTargets(self, manually_generated: Optional[List[str]]):
         self.manually_generated = manually_generated or []
@@ -396,6 +424,20 @@ def _printNiceDict(d: dict[str, Any]) -> str:
     return "".join([f"  {k}: {v}\n" for k, v in d.items()])
 
 
+def genBazel(buildTarget: BuildTarget, bb: BazelBuild, rootdir: str):
+
+    if rootdir.endswith("/"):
+        dir = rootdir
+    else:
+        dir = f"{rootdir}/"
+
+    ctx = BazelBuildVisitorContext(dir, bb)
+
+    visitor = BuildVisitor.getVisitor()
+
+    buildTarget.visitGraph(visitor, ctx)
+
+
 def getBuildTargets(
     raw_ninja: List[str],
     dir: str,
@@ -403,12 +445,15 @@ def getBuildTargets(
     manuallyGenerated: Optional[List[str]],
     codeRootDir: str,
     directoryPrefix: str,
+    remap: Dict[str, str],
 ) -> List[BuildTarget]:
+    TopLevelGroupingStrategy(directoryPrefix)
+
     parser = NinjaParser(codeRootDir)
     parser.setManuallyGeneratedTargets(manuallyGenerated)
     parser.setContext(ninjaFileName)
+    parser.setRemapPath(remap)
     parser.setDirectoryPrefix(directoryPrefix)
-    TopLevelGroupingStrategy(directoryPrefix)
     parser.parse(raw_ninja, dir)
     parser.endContext(ninjaFileName)
 
@@ -423,9 +468,24 @@ def getBuildTargets(
     return top_levels
 
 
+def printGraph(element: BuildTarget, ident: int = 0, file=sys.stdout):
+    def visitor(el: "BuildTarget", ctx: VisitorContext, _var: bool = False):
+        assert isinstance(ctx, PrintVisitorContext)
+        print(" " * ctx.ident + el.name)
+        if el.producedby is None:
+            return
+        for d in el.producedby.depends:
+            if d.producedby is None and d.type == TargetType.external:
+                print(" " * (ctx.ident + 1) + f"  {d.name} (external)")
+
+    ctx = PrintVisitorContext(ident, file)
+
+    element.visitGraph(visitor, ctx)
+
+
 def genBazelBuildFiles(top_levels: list[BuildTarget], rootdir: str) -> str:
     bb = BazelBuild()
     for e in sorted(top_levels):
-        e.genBazel(bb, rootdir)
+        genBazel(e, bb, rootdir)
 
     return bb.genBazelBuildContent()

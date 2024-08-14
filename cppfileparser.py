@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import Generator, List, Optional, Set
+from typing import Generator, List, Optional, Set, Dict
 
 
 def findAllHeaderFiles(current_dir: str) -> Generator[str, None, None]:
@@ -16,7 +16,7 @@ def parseIncludes(includes: str) -> Set[str]:
     return set(matches)
 
 
-cache = {}
+cache: Dict[str, List[str]] = {}
 seen = set()
 
 
@@ -26,6 +26,8 @@ def findCPPIncludes(
     key = f"{name} {includes}"
     # There is sometimes loop, as we don't really implement the #pragma once
     # deal with it
+    if key in cache:
+        return cache[key]
     if key in seen:
         return []
     seen.add(key)

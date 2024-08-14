@@ -11,8 +11,9 @@ class BazelBuild:
     def genBazelBuildContent(self) -> str:
         topContent = []
         content = []
-        for t in self.bazelTargets:
+        for t in sorted(self.bazelTargets):
             try:
+                content.append(f"# Location {t.location}")
                 content.extend(t.asBazel())
                 topContent.append(t.getGlobalImport())
             except Exception as e:
@@ -39,8 +40,7 @@ class BaseBazelTarget(object):
         return hash(self.type + self.name)
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, BazelTarget):
-            return False
+        assert isinstance(other, BaseBazelTarget)
         return self.name == other.name
 
     def __lt__(self, other: "BaseBazelTarget") -> bool:
@@ -147,7 +147,7 @@ class BazelTarget(BaseBazelTarget):
                     pathPrefix = (
                         f"//{d.location}" if d.location != self.location else ""
                     )
-                    ret.append(f'        "{pathPrefix}:{d.targetName()}",')
+                    ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
         ret.append(")")
 
@@ -190,7 +190,7 @@ class BazelGenRuleTarget(BaseBazelTarget):
                     pathPrefix = (
                         f"//{d.location}" if d.location != self.location else ""
                     )
-                    ret.append(f'        "{pathPrefix}:{d.targetName()}",')
+                    ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
         ret.append(f'    cmd = "{self.cmd}",')
         ret.append(")")
@@ -230,7 +230,7 @@ class BazelCCProtoLibrary(BaseBazelTarget):
             ret.append("    deps = [")
             for d in sorted(self.deps):
                 pathPrefix = f"//{d.location}" if d.location != self.location else ""
-                ret.append(f'        "{pathPrefix}:{d.targetName()}",')
+                ret.append(f'        "{pathPrefix}{d.targetName()}",')
             ret.append("    ],")
         ret.append(")")
 
@@ -268,7 +268,7 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
                     pathPrefix = (
                         f"//{d.location}" if d.location != self.location else ""
                     )
-                    ret.append(f'        "{pathPrefix}:{d.targetName()}",')
+                    ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
         ret.append(")")
 
@@ -294,6 +294,9 @@ class BazelProtoLibrary(BaseBazelTarget):
     def addSrc(self, target: BaseBazelTarget):
         self.srcs.add(target)
 
+    def addDep(self, target: BaseBazelTarget):
+        self.deps.add(target)
+
     def asBazel(self) -> List[str]:
         ret = []
         ret.append(f"{self.type}(")
@@ -309,7 +312,7 @@ class BazelProtoLibrary(BaseBazelTarget):
                     pathPrefix = (
                         f"//{d.location}" if d.location != self.location else ""
                     )
-                    ret.append(f'        "{pathPrefix}:{d.targetName()}",')
+                    ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
         ret.append(")")
 
