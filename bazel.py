@@ -76,10 +76,13 @@ class BazelTarget(BaseBazelTarget):
         self.hdrs: set[BaseBazelTarget] = set()
         self.deps: set[BaseBazelTarget] = set()
         self.addPrefixIfRequired: bool = True
-        # logging.info(f"Created BazelTarget {name}/{type}")
+        self.copts: List[str] = []
 
     def targetName(self) -> str:
         return self.depName()
+
+    def addCopt(self, opt):
+        self.copts.append(opt)
 
     def depName(self):
         if self.type == "cc_library" or self.type == "cc_shared_library":
@@ -132,12 +135,22 @@ class BazelTarget(BaseBazelTarget):
         ret.append(f'    name = "{self.targetName()}",')
         deps_headers = self.getAllHeaders(deps_only=True)
         headers = []
+        data = []
         for h in self.hdrs:
             if h not in deps_headers:
-                headers.append(h)
+                if (
+                    h.name.endswith(".h")
+                    or h.name.endswith(".hpp")
+                    or h.name.endswith(".tcc")
+                ):
+                    headers.append(h)
+                else:
+                    data.append(h)
         sources = [f for f in self.srcs]
-        hm = {"srcs": sources, "hdrs": headers, "deps": self.deps}
+        hm = {"srcs": sources, "hdrs": headers, "deps": self.deps, "data": data}
+
         if self.type == "cc_binary":
+            del hm["hdrs"]
             sources.extend(headers)
             headers = []
         for k, v in hm.items():
@@ -148,6 +161,14 @@ class BazelTarget(BaseBazelTarget):
                         f"//{d.location}" if d.location != self.location else ""
                     )
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
+                ret.append("    ],")
+
+        textOptions: Dict[str, List[str]] = {"copts": self.copts}
+        for k, v2 in textOptions.items():
+            if len(v2) > 0:
+                ret.append(f"    {k} = [")
+                for to in sorted(v2):
+                    ret.append(f'        "{to}",')
                 ret.append("    ],")
         ret.append(")")
 
@@ -162,6 +183,9 @@ class BazelGenRuleTarget(BaseBazelTarget):
         self.srcs: set[BaseBazelTarget] = set()
         self.data: set[BaseBazelTarget] = set()
         self.tools: set[BaseBazelTarget] = set()
+        # We most probably don't want to do remote execution as we are running things from the
+        # filesystem
+        self.local: bool = True
 
     def addSrc(self, target: BaseBazelTarget):
         self.srcs.add(target)
@@ -192,7 +216,8 @@ class BazelGenRuleTarget(BaseBazelTarget):
                     )
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
-        ret.append(f'    cmd = "{self.cmd}",')
+        ret.append(f'    cmd = """{self.cmd}""",')
+        ret.append(f"    local = {self.local},")
         ret.append(")")
 
         return ret
@@ -321,6 +346,19 @@ class BazelProtoLibrary(BaseBazelTarget):
 
 @total_ordering
 class BazelGenRuleTargetOutput(BaseBazelTarget):
+    def __repr__(self):
+        return f"genrule_output {self.name}"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.name == other
+        if isinstance(other, BazelGenRuleTargetOutput):
+            return self.name == other.name
+        return False
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
     def __init__(
         self,
         name: str,
@@ -355,7 +393,31 @@ class PyBinaryBazelTarget(BaseBazelTarget):
             for f in sorted(sources):
                 ret.append(f'        "{f.targetName()}",')
             ret.append("    ],")
-        ret.append('    cmd = f"{self.cmd}",')
+        ret.append(f'    main = "{self.main}",')
+        ret.append(")")
+
+        return ret
+
+    def addSrc(self, target: BaseBazelTarget):
+        self.srcs.add(target)
+
+
+class ShBinaryBazelTarget(BaseBazelTarget):
+    def __init__(self, name: str, location: str):
+        super().__init__("sh_binary", name, location)
+        self.srcs: set[BaseBazelTarget] = set()
+        self.data: set[BaseBazelTarget] = set()
+
+    def asBazel(self) -> List[str]:
+        ret = []
+        ret.append(f"{self.type}(")
+        ret.append(f'    name = "{self.name}",')
+        sources = [f for f in self.srcs]
+        if len(sources) > 0:
+            ret.append("    srcs = [")
+            for f in sorted(sources):
+                ret.append(f'        "{f.targetName()}",')
+            ret.append("    ],")
         ret.append(")")
 
         return ret

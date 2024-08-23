@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import Generator, List, Optional, Set, Dict
+from typing import Dict, Generator, List, Optional, Set, Tuple
 
 
 def findAllHeaderFiles(current_dir: str) -> Generator[str, None, None]:
@@ -16,13 +16,13 @@ def parseIncludes(includes: str) -> Set[str]:
     return set(matches)
 
 
-cache: Dict[str, List[str]] = {}
+cache: Dict[str, List[Tuple[str, str]]] = {}
 seen = set()
 
 
 def findCPPIncludes(
     name: str, includes: str, parent: Optional[str] = None
-) -> List[str]:
+) -> List[Tuple[str, str]]:
     key = f"{name} {includes}"
     # There is sometimes loop, as we don't really implement the #pragma once
     # deal with it
@@ -40,8 +40,10 @@ def findCPPIncludes(
     with open(name, "r") as f:
         content = f.readlines()
     ret = []
+    not_found = []
     for line in content:
-        match = re.match(r'#include ((?:<|").*(?:>|"))', line)
+        found = False
+        match = re.match(r'#\s*include ((?:<|").*(?:>|"))', line)
         if not match:
             continue
         current_include = match.group(1)
@@ -49,8 +51,10 @@ def findCPPIncludes(
         if current_include.startswith('"'):
             full_file_name = f"{current_dir}/{file}"
             if os.path.exists(full_file_name) and not os.path.isdir(full_file_name):
+                found = True
                 logging.debug(f"Found {file} in the same directory as the looked file")
-                ret.append(full_file_name)
+                full_file_name = os.path.realpath(full_file_name)
+                ret.append((full_file_name, current_dir))
                 ret.extend(findCPPIncludes(full_file_name, includes, name))
             else:
                 # file don't exists in the same directory, let's try to find one
@@ -65,8 +69,10 @@ def findCPPIncludes(
                     ):
                         continue
                     logging.debug(f"Found {file} in the includes variable")
-                    ret.append(full_file_name)
+                    ret.append((full_file_name, d))
+                    full_file_name = os.path.realpath(full_file_name)
                     ret.extend(findCPPIncludes(full_file_name, includes, name))
+                    found = True
                     break
         else:
             for d in includes_dirs:
@@ -77,8 +83,14 @@ def findCPPIncludes(
                 if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
                     continue
                 logging.debug(f"Found {file} in the includes variable")
-                ret.append(full_file_name)
+                ret.append((full_file_name, d))
+                full_file_name = os.path.realpath(full_file_name)
                 ret.extend(findCPPIncludes(full_file_name, includes, name))
+                found = True
                 break
+        if not found:
+            not_found.append(file)
+    if len(not_found) > 0:
+        logging.info(f"Could not find {not_found} in {name}")
     cache[key] = ret
     return ret
