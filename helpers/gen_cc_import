@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+
+# Mostly for system libraries (ie. the one that you get from a package manager)
+import os
+import subprocess
+
+
+def getStanza(shared_lib: str, header: list[str], shared_libs: list[str]) -> str:
+    name = shared_lib.split("/")[-1]
+    name = name.replace(".so", "")
+    static_lib = None
+
+    for lib2 in static_libs:
+        if lib2.split("/")[-1].startswith(name):
+            static_lib = lib2
+            break
+    txt = ""
+    if static_lib is not None:
+        txt = f'    static_library = "{shared_lib}",\n'
+    stanza = f"""
+cc_import(
+    name = "{name}",
+    interface_library= "{shared_lib}",
+    hdrs = {list(headers)},
+    system_provided = 1,
+{txt})"""
+    return stanza
+
+
+seen = set()
+
+with open("/dev/stdin") as input:
+    line = input.readline()
+    while line:
+        line = line.rstrip()
+
+        path = line
+        args = ["dpkg", "-S", path]
+        if path in seen:
+            line = input.readline()
+            continue
+        process = subprocess.run(args, stdout=subprocess.PIPE)
+        pkg = None
+        for pkg_line in process.stdout.split():
+            if b":" in pkg_line:
+                pkg = pkg_line.decode("utf-8").split(":")
+        shared_libs: set[str] = set()
+        static_libs: set[str] = set()
+        headers: set[str] = set()
+        unknowns: set[str] = set()
+        if pkg is not None:
+
+            args = ["dpkg", "-L", pkg[0]]
+            process = subprocess.run(args, stdout=subprocess.PIPE)
+            for pkg_line in process.stdout.split():
+                entry = pkg_line.decode("utf-8")
+                if (
+                    "share/man/" in entry
+                    or "share/doc/" in entry
+                    or os.path.isdir(entry)
+                    or entry.endswith(".pc")
+                    or entry.endswith(".cmake")
+                ):
+                    continue
+                if entry.endswith(".so"):
+                    shared_libs.add(entry)
+                    seen.add(entry)
+                elif entry.endswith(".a"):
+                    static_libs.add(entry)
+                    seen.add(entry)
+                elif entry.endswith(".h"):
+                    headers.add(entry)
+                else:
+                    unknowns.add(entry)
+
+        name = line.split("/")[-1]
+        name = name.replace(".so", "")
+        name = name.replace(".a", "")
+        if len(shared_libs) > 1:
+            # This is a map of libs that are used by other libs
+            lib2libs: dict[str, list[str]] = {}
+            for lib in shared_libs:
+                args = ["ldd", lib]
+                process = subprocess.run(args, stdout=subprocess.PIPE)
+                out = process.stdout.decode("utf-8")
+                for entry in out.split("\n"):
+                    if not entry:
+                        break
+                    if "=>" in entry:
+                        dep = entry.split("=>")[1].strip().split()[0].split("/")[-1]
+                        for lib2 in shared_libs:
+                            prefix = lib2.split("/")[-1]
+                            if dep.startswith(prefix):
+                                lst = lib2libs.get(lib2, [])
+                                lst.append(lib)
+                                lib2libs[lib2] = lst
+
+        if len(shared_libs) > 0:
+            for lib in shared_libs:
+                print(getStanza(lib, list(headers), list(shared_libs)))
+
+        line = input.readline()

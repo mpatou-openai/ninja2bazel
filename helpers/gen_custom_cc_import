@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+import re
+import subprocess
+
+
+class CLibrary:
+    def __init__(self, name: str, path: str):
+        self.name = name
+        self.path = path
+        self.deps: set["CLibrary"] = set()
+        regex = r"lib([^_.+]*).*"
+        self.prefix = re.sub(regex, r"\1", name)
+        self.static = set()
+        self.shared = set()
+        if path.endswith(".a"):
+            self.static.add(path)
+        elif path.endswith(".so"):
+            self.shared.add(path)
+        else:
+            print(f"Unknown type of library {path}")
+
+    def addStatic(self, static: str):
+        self.static.add(static)
+
+    def addshared(self, shared: str):
+        self.shared.add(shared)
+
+    def guessimateHrdsFolder(self) -> str:
+        if self.prefix.startswith("aws-cpp-sdk"):
+            suffix = self.prefix.replace("aws-cpp-sdk-", "")
+            return f"/usr/local/include/aws/{suffix}"
+        if self.prefix.startswith("aws-c-"):
+            suffix = self.prefix.replace("aws-c-", "")
+            return f"/usr/local/include/aws/{suffix}"
+        if self.prefix.startswith("aws-crt-cpp"):
+            return "/usr/local/include/aws/crt"
+        if self.prefix.startswith("aws-"):
+            suffix = self.prefix.replace("aws-", "")
+            return f"/usr/local/include/aws/{suffix}"
+        return f"/usr/local/include/{self.prefix}"
+
+    def asBazel(self) -> str:
+        headers = 'glob(["{}/**/*.h"])'.format(self.guessimateHrdsFolder())
+        chuncks = ["cc_import("]
+        chuncks.append(f'    name = "{self.name}",')
+        if len(self.shared) > 0:
+            chuncks.append(f'    interface_library = "{list(self.shared)[0]}",')
+        chuncks.append(f"    hdrs = {headers},")
+        chuncks.append("    system_provided = 1,")
+        if len(self.static) > 0:
+            chuncks.append(f"    static_libs = {list(self.static)[0]},")
+
+        chuncks.append(")")
+        return "\n".join(chuncks)
+
+    def __eq__(self, other):
+        return self.name == other.name and self.path == other.path
+
+    def __hash__(self):
+        return hash(self.name)
+
+
+def getDepend(libPath: str, libs: dict[str, CLibrary]):
+    args = ["ldd", libPath]
+    process = subprocess.run(args, stdout=subprocess.PIPE)
+    out = process.stdout.decode("utf-8")
+    regex = r"(\.so(?:\.\d+(?:\.\d+)*$)?$)"
+    for entry in out.split("\n"):
+        if "=>" in entry:
+            dep = entry.split("=>")[1].strip().split()[0].split("/")[-1]
+            name = re.sub(regex, "", dep)
+            if name in libs:
+                libs[name].deps.add(libs[name])
+
+
+def bootStrap(allLibs: list[str]) -> dict[str, CLibrary]:
+    libs: dict[str, CLibrary] = {}
+    for lib in allLibs:
+        name = lib.split("/")[-1]
+        name = name.replace(".so", "")
+        name = name.replace(".a", "")
+        if name in libs:
+            if lib.endswith(".so"):
+                libs[name].addshared(lib)
+            elif lib.endswith(".a"):
+                libs[name].addStatic(lib)
+        libs[name] = CLibrary(name, lib)
+    return libs
+
+
+def getRawLibs() -> list[str]:
+    with open("/dev/stdin") as input:
+        line = input.readline()
+        libs = []
+        while line:
+            line = line.rstrip()
+            libs.append(line)
+            line = input.readline()
+    return libs
+
+
+def main():
+    rawlibs = getRawLibs()
+    lib2Libs = bootStrap(rawlibs)
+    for lib in rawlibs:
+        if lib.endswith(".a"):
+            continue
+        getDepend(lib, lib2Libs)
+    for libObj in lib2Libs.values():
+        try:
+            print(libObj.asBazel())
+        except Exception as e:
+            print(f"Failed to convert {libObj.name} due to {e}")
+
+
+main()
