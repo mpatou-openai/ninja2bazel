@@ -205,10 +205,10 @@ class NinjaParser:
                     )
                     or realPath.startswith(self.codeRootDir)
                 ):
-                    logging.info(f"Marking {s} as an known dependency")
+                    logging.debug(f"Marking {s} as an known dependency")
                     inputs.append(BuildTarget(s, self.getShortName(s)).markAsFile())
                 else:
-                    logging.info(f"Marking {s} as an external dependency")
+                    logging.info(f"Marking {s} as an external dependency {realPath}")
                     inputs.append(BuildTarget(s, self.getShortName(s)).markAsExternal())
             # Massive hack: assume that files ending with .c/cc with a folder name third-party
             # exists
@@ -300,7 +300,9 @@ class NinjaParser:
                 if i.is_a_file and isCPPLikeFile(i.name):
                     includes = t.producedby.vars.get("INCLUDES", "")
                     headers = findCPPIncludes(i.name, includes)
-                    i.setIncludedFiles([self.getShortName(h) for h in headers])
+                    i.setIncludedFiles(
+                        [(self.getShortName(h[0]), h[1]) for h in headers]
+                    )
                 if i.is_a_file and isProtoLikeFile(i.name):
                     includes_dirs: List[str] = []
                     for part in t.producedby.vars.get("COMMAND", "").split("&&"):

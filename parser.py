@@ -29,6 +29,11 @@ def main():
         default="",
         help="Initial directory prefix for generated Bazel BUILD files",
     )
+    parser.add_argument(
+        "--imports",
+        default="",
+        help="A file containing a list of cc_imports to be added to the BUILD files",
+    )
     args = parser.parse_args()
 
     filename = args.filename
@@ -42,6 +47,10 @@ def main():
         sys.exit(-1)
     with open(filename, "r") as f:
         raw_ninja = f.readlines()
+
+    if args.imports != "":
+        with open(args.imports, "r") as f:
+            raw_imports = f.readlines()
 
     prefix = ""
     if args.prefix != "":
@@ -58,9 +67,10 @@ def main():
     if not rootdir.endswith(os.path.sep):
         rootdir = f"{rootdir}{os.path.sep}"
     remap = {}
-    for e in args.remap:
-        (fromPath, toPath) = e.split("=")
-        remap[fromPath] = toPath
+    if args.remap:
+        for e in args.remap:
+            (fromPath, toPath) = e.split("=")
+            remap[fromPath] = toPath
 
     top_levels_targets = getBuildTargets(
         raw_ninja, cur_dir, filename, manually_generated, rootdir, prefix, remap

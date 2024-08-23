@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from bazel import (BaseBazelTarget, BazelBuild, BazelCCProtoLibrary,
                    BazelGenRuleTarget, BazelGRPCCCProtoLibrary,
                    BazelProtoLibrary, BazelTarget, ExportedFile,
-                   PyBinaryBazelTarget)
+                   ShBinaryBazelTarget)
 from visitor import VisitorContext
 
 VisitorType = Callable[["BuildTarget", "VisitorContext", bool], None]
@@ -369,18 +369,23 @@ class Build:
             ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
             if el.includes is None:
                 return
+            logging.info(f"Handling includes for {el.name}")
+            incDirs = set()
             for i, d in el.includes:
+                incDirs.add(d)
+                # TODO ensure that we don't have relative path
                 if isinstance(ctx.dest, BazelTarget):
                     # FIXME !!! this is wrong the name of the generated file that we create
-                    ctx.dest.addHdr(
-                        ctx.dest.addHdr(
-                            ctx.dest.addSrc(cls._genExportedFile(i, ctx.dest.location))
-                        )
-                    )
+                    ctx.dest.addHdr(cls._genExportedFile(i, ctx.dest.location))
                 else:
                     logging.warn(
                         f"{i} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
                     )
+            if not isinstance(ctx.dest, BazelTarget):
+                return
+            if len(incDirs) > 0:
+                for d in list(incDirs):
+                    ctx.dest.addCopt(f"-I {d.replace(ctx.rootdir, '')}")
 
     @classmethod
     def handleManuallyGeneratedForBazelGen(
@@ -479,8 +484,12 @@ class Build:
             for e in arr[1:]:
                 if e in self.inputs:
                     genTarget.addSrc(self._genExportedFile(e, genTarget.location))
-
+            outDirs = set()
+            outFiles = set()
             for elm in self.outputs:
+                logging.info(f"Adding output {elm.shortName}")
+                outDirs.add(os.path.dirname(elm.shortName))
+                outFiles.add(elm.shortName)
                 genTarget.addOut(
                     elm.shortName,
                 )
@@ -490,17 +499,64 @@ class Build:
             # We don't need to handle the replacement of prefix and whatnot bazel seems to be able
             # to handle it
             cmd = cmd.replace(self.vars.get("cmake_ninja_workdir", ""), "")
-            if arr[0].endswith(".py"):
-                cmdTarget = PyBinaryBazelTarget(f"{name}_cmd_py", location)
-                cmdTarget.main = arr[0]
-                ctx.bazelbuild.bazelTargets.add(cmdTarget)
+            countRewrote = 0
+
+            alteredArgs = []
+            command = arr[0]
+            if command.endswith(".py"):
+                for arg in arr[1:]:
+                    found = False
+                    for outFile in outFiles:
+                        if outFile == os.path.basename(arg) or outFile.endswith(
+                            os.path.sep + os.path.basename(arg)
+                        ):
+                            logging.info(f"{arg} => {outFile}")
+                            prefix = ":" if not outFile.startswith(":") else ""
+                            alteredArgs.append(f"$(location {prefix}{outFile})")
+                            countRewrote += 1
+                            found = True
+                    if not found:
+                        alteredArgs.append(arg)
+                # Generate a shell script to run the custom command
+                buildTarget = BazelGenRuleTarget(f"{name}_cmd_build", location)
+                buildTarget.addOut(f"{name}_cmd.sh")
+                # Add the sha1 of all inputs to force rebuild if intput file changes
+
+                if countRewrote == len(arr[1:]):
+
+                    def genShBinaryScript(rootdir: str, pycommand: str) -> str:
+                        return f"""
+echo -ne '#!/bin/bash \\n\\
+#set -x\\n\\
+cur=$$(pwd)\\n\\
+cd {rootdir}\\n\\
+export PYTHONPATH={rootdir}:$$PYTHONPATH\\n\\
+python3 {pycommand} $$@ \\n\\
+' > $@
+chmod a+x $@
+                """
+
+                else:
+                    logging.warn(
+                        "Need to write the function for dealing with non fully rewritten arguments"
+                    )
+
+                buildTarget.cmd = genShBinaryScript(ctx.rootdir, command)
+                # Make a sh_binary target out of iter
+                shBinary = ShBinaryBazelTarget(f"{name}_cmd", location)
+                shBinary.addSrc(buildTarget)
                 genTarget.cmd = (
-                    "./$(location ${cmdTarget.depName()}" + " " + " ".join(arr[1:])
+                    f"./$(location {shBinary.targetName()})"
+                    + " "
+                    + " ".join(alteredArgs)
                 )
-                genTarget.addTool(cmdTarget)
+                genTarget.addTool(shBinary)
                 for e in allInputs:
                     if e.endswith(".py"):
-                        cmdTarget.addSrc(self._genExportedFile(e, genTarget.location))
+                        buildTarget.addSrc(self._genExportedFile(e, genTarget.location))
+                ctx.bazelbuild.bazelTargets.add(buildTarget)
+                ctx.bazelbuild.bazelTargets.add(shBinary)
+
             else:
                 genTarget.cmd = cmd.strip()
             ctx.bazelbuild.bazelTargets.add(genTarget)
@@ -573,6 +629,26 @@ class Build:
         else:
             ctx.current.addDep(self.associatedBazelTarget)
 
+    def _handleCPPLinkExecutableCommand(
+        self, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
+    ):
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        if self.associatedBazelTarget is None:
+            t = BazelTarget("cc_binary", el.name, location)
+            nextCurrent = t
+            ctx.bazelbuild.bazelTargets.add(t)
+            self.setAssociatedBazelTarget(t)
+        else:
+            tmp = self.associatedBazelTarget
+            assert isinstance(tmp, BazelTarget)
+            t = tmp
+            nextCurrent = tmp
+
+        if ctx.current is not None:
+            ctx.current.addDep(t)
+        ctx.current = nextCurrent
+        return
+
     def _handleCPPLinkCommand(
         self, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
     ):
@@ -602,7 +678,7 @@ class Build:
             if t.type == "cc_shared_library":
                 tmp = t.deps.pop()
                 assert isinstance(tmp, BazelTarget)
-                nextCurrent = tmp
+            nextCurrent = tmp
 
         if ctx.current is not None:
             ctx.current.addDep(t)
@@ -637,6 +713,9 @@ class Build:
                 # compilation of a source file to an object file, this is taken care by
                 # bazel targets like cc_binary or cc_library
             return
+        if self.isCPPCommand(cmd):
+            self._handleCPPLinkExecutableCommand(el, cmd, ctx)
+            return
         if self.isStaticArchiveCommand(cmd):
             assert len(self.outputs) == 1
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
@@ -646,7 +725,7 @@ class Build:
             ctx.current = t
             ctx.bazelbuild.bazelTargets.add(t)
             return
-        logging.warn(f"Don't know how to hande {cmd} for {el}")
+        logging.warn(f"Don't know how to handle {cmd} for {el}")
 
     def __repr__(self) -> str:
         return (
