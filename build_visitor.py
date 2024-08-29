@@ -32,32 +32,17 @@ class BuildVisitor:
                     f"Skipping non phony top level target that is not used by anything: {el}"
                 )
                 return
-            ctx.producer = build
-            rule = build.rulename
-            c = rule.vars.get("command")
-            assert c is not None
-            c2 = build._resolveName(c, ["in", "out", "TARGET_FILE"])
-            if c2 != c:
-                c = c2
-            arr = c.split("&&")
-            found = False
-
-            for cmd in arr:
-                if build.rulename.name == "CUSTOM_COMMAND":
-                    for fin in build.inputs:
-                        if fin.is_a_file:
-                            if fin.name in cmd:
-                                found = True
-                                break
-                if "$in" in cmd and ("$out" in cmd or "$TARGET_FILE" in cmd):
-                    found = True
-                    break
-            if not found and build.rulename.name != "CUSTOM_COMMAND":
+            cmd = build.getCoreCommand()
+            if cmd is None and build.rulename.name != "CUSTOM_COMMAND":
                 logging.warning(f"{el} has no valid command {build.inputs}")
-                logging.warning(f"Didn't find a valid command in {c}")
+                logging.warning(
+                    f"Didn't find a valid command in {build.getRawcommand()}"
+                )
                 return
+            assert cmd is not None
             build.handleRuleProducedForBazelGen(ctx, el, cmd)
         elif build.rulename.name == "phony":
+            logging.info(f"Handling phony {build.outputs[0]}")
             build.handlePhonyForBazelGen(ctx, el, build)
         elif el.type == TargetType.manually_generated:
             build.handleManuallyGeneratedForBazelGen(ctx, el, build)
@@ -65,12 +50,25 @@ class BuildVisitor:
     @classmethod
     def getVisitor(cls) -> VisitorType:
         def visitor(el: "BuildTarget", ctx: VisitorContext, _var: bool = False):
+            build = el.producedby
             assert isinstance(ctx, BazelBuildVisitorContext)
+            if ctx.producer is not None and ctx.producer.rulename.name == "phony":
+                if (
+                    build is not None
+                    and ctx.parentIsPhony
+                    and not build.canGenerateFinal()
+                ):
+                    logging.info(
+                        f"Skipping {el.name} used by {ctx.producer.outputs[0]} because it's a chain of empty targets"
+                    )
+                    return False
             if el.producedby is not None:
                 build = el.producedby
-                return BuildVisitor.visitProduced(ctx, el, build)
-            # Note deal with C/C++ files only here
+                BuildVisitor.visitProduced(ctx, el, build)
+                return True
             else:
-                return Build.handleFileForBazelGen(el, ctx)
+                Build.handleFileForBazelGen(el, ctx)
+                return True
+            return True
 
         return visitor

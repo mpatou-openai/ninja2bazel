@@ -1,7 +1,51 @@
 import logging
+import os
 import re
 from functools import total_ordering
 from typing import Dict, List, Optional, Set, Union
+
+IncludeDir = tuple[str, bool]
+
+
+class BazelCCImport:
+    def __init__(self, name: str):
+        self.name = name
+        self.system_provided = 0
+        self.hdrs: list[str] = []
+        self.staticLibrary: Optional[str] = None
+        self.sharedLibrary: Optional[str] = None
+        self.location = ""
+
+    def setHdrs(self, hdrs: List[str]):
+        self.hdrs = hdrs
+
+    def setSystemProvided(self):
+        self.system_provided = 1
+
+    def setStaticLibrarys(self, staticLibrary: str):
+        self.staticLibrary = staticLibrary
+
+    def setSharedLibrarys(self, sharedLibrary: str):
+        self.sharedLibrary = sharedLibrary
+
+    def setLocation(self, location: str):
+        self.location = location
+
+    def __eq__(self, other: object) -> bool:
+        assert isinstance(other, BazelCCImport)
+        return self.name == other.name
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __lt__(self, other: "BazelCCImport") -> bool:
+        return self.name < other.name
+
+    def __repr__(self) -> str:
+        return f"cc_import {self.name}"
+
+    def targetName(self) -> str:
+        return f":{self.name}"
 
 
 class BazelBuild:
@@ -9,7 +53,7 @@ class BazelBuild:
         self.bazelTargets: Set["BaseBazelTarget"] = set()
 
     def genBazelBuildContent(self) -> str:
-        topContent = []
+        topContent = ['load(":helpers.bzl", "add_bazel_out_prefix")']
         content = []
         for t in sorted(self.bazelTargets):
             try:
@@ -46,7 +90,7 @@ class BaseBazelTarget(object):
     def __lt__(self, other: "BaseBazelTarget") -> bool:
         return self.name < other.name
 
-    def addDep(self, target: "BaseBazelTarget"):
+    def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
         raise NotImplementedError(f"Class {self.__class__} doesn't implement addDep")
 
     def addSrc(self, target: "BaseBazelTarget"):
@@ -67,6 +111,20 @@ class ExportedFile(BaseBazelTarget):
     def __str__(self) -> str:
         return self.name
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.name == other
+        if isinstance(other, ExportedFile):
+            return self.name == other.name
+        if isinstance(other, BazelGenRuleTargetOutput):
+            return self.name == other.targetName()
+        return False
+
+    def __hash__(self) -> int:
+        if self.name.startswith(":"):
+            return hash(self.name[1:])
+        return hash(self.name)
+
 
 @total_ordering
 class BazelTarget(BaseBazelTarget):
@@ -74,14 +132,15 @@ class BazelTarget(BaseBazelTarget):
         super().__init__(type, name, location)
         self.srcs: set[BaseBazelTarget] = set()
         self.hdrs: set[BaseBazelTarget] = set()
-        self.deps: set[BaseBazelTarget] = set()
+        self.includeDirs: set[IncludeDir] = set()
+        self.deps: set[Union[BaseBazelTarget, BazelCCImport]] = set()
         self.addPrefixIfRequired: bool = True
         self.copts: List[str] = []
 
     def targetName(self) -> str:
         return self.depName()
 
-    def addCopt(self, opt):
+    def addCopt(self, opt: str):
         self.copts.append(opt)
 
     def depName(self):
@@ -107,11 +166,13 @@ class BazelTarget(BaseBazelTarget):
                 logging.warn(f"Can't get headers for {d.name}")
                 raise
 
-    def addDep(self, target: BaseBazelTarget):
+    def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
         self.deps.add(target)
 
-    def addHdr(self, target: BaseBazelTarget):
+    def addHdr(self, target: BaseBazelTarget, includeDir: Optional[IncludeDir] = None):
         self.hdrs.add(target)
+        if includeDir is not None:
+            self.includeDirs.add(includeDir)
 
     def addSrc(self, target: BaseBazelTarget):
         self.srcs.add(target)
@@ -162,13 +223,23 @@ class BazelTarget(BaseBazelTarget):
                     )
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
-
+        copts = self.copts
+        for dir in list(self.includeDirs):
+            # The second element IncludeDir is a flag to indicate if the header is generated
+            # and if so we need to add the bazel-out prefix to the -I option
+            if dir[1]:
+                dirName = (
+                    f'add_bazel_out_prefix("{self.location + os.path.sep +dir[0]}")'
+                )
+            else:
+                dirName = f'"{dir[0]}"'
+            copts.append(f'"-I{{}}".format({dirName})')
         textOptions: Dict[str, List[str]] = {"copts": self.copts}
         for k, v2 in textOptions.items():
             if len(v2) > 0:
                 ret.append(f"    {k} = [")
                 for to in sorted(v2):
-                    ret.append(f'        "{to}",')
+                    ret.append(f"        {to},")
                 ret.append("    ],")
         ret.append(")")
 
@@ -225,13 +296,16 @@ class BazelGenRuleTarget(BaseBazelTarget):
     def getOutputs(
         self, name: str, stripedPrefix: Optional[str] = None
     ) -> List["BazelGenRuleTargetOutput"]:
+        if stripedPrefix:
+            name = name.replace(stripedPrefix, "")
         if name not in self.outs:
             raise ValueError(f"Output {name} didn't exists on genrule {self.name}")
-        regex = r"(.*)\.[h|cc|cpp|hpp|c]"
+        regex = r".*?/?([^/]*)\.[h|cc|cpp|hpp|c]"
         match = re.match(regex, name)
         if match:
+            regex2 = rf".*?{match.group(1)}\.[h|cc|cpp|hpp|c]"
             namePrefix = match.group(1)
-            outs = [v for v in self.outs if v.name.startswith(namePrefix)]
+            outs = [v for v in self.outs if re.match(regex2, v.name)]
         else:
             outs = [v for v in self.outs if v.name == namePrefix]
 
@@ -243,7 +317,7 @@ class BazelCCProtoLibrary(BaseBazelTarget):
         super().__init__("cc_proto_library", name, location)
         self.deps: Set[BaseBazelTarget] = set()
 
-    def addDep(self, dep: BaseBazelTarget):
+    def addDep(self, dep: Union[BaseBazelTarget, BazelCCImport]):
         assert isinstance(dep, BazelProtoLibrary)
         self.deps.add(dep)
 
@@ -268,7 +342,7 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
         self.deps: Set[BaseBazelTarget] = set()
         self.srcs: Set[BaseBazelTarget] = set()
 
-    def addDep(self, dep: BaseBazelTarget):
+    def addDep(self, dep: Union[BaseBazelTarget, BazelCCImport]):
         assert isinstance(dep, BazelCCProtoLibrary)
         self.deps.add(dep)
 
@@ -319,7 +393,8 @@ class BazelProtoLibrary(BaseBazelTarget):
     def addSrc(self, target: BaseBazelTarget):
         self.srcs.add(target)
 
-    def addDep(self, target: BaseBazelTarget):
+    def addDep(self, target: Union[BaseBazelTarget, BazelCCImport]):
+        assert isinstance(target, BaseBazelTarget)
         self.deps.add(target)
 
     def asBazel(self) -> List[str]:
@@ -353,6 +428,8 @@ class BazelGenRuleTargetOutput(BaseBazelTarget):
         if isinstance(other, str):
             return self.name == other
         if isinstance(other, BazelGenRuleTargetOutput):
+            return self.name == other.name
+        if isinstance(other, BaseBazelTarget):
             return self.name == other.name
         return False
 

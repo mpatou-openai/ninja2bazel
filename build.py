@@ -4,15 +4,15 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from functools import total_ordering
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
-from bazel import (BaseBazelTarget, BazelBuild, BazelCCProtoLibrary,
-                   BazelGenRuleTarget, BazelGRPCCCProtoLibrary,
-                   BazelProtoLibrary, BazelTarget, ExportedFile,
-                   ShBinaryBazelTarget)
+from bazel import (BaseBazelTarget, BazelBuild, BazelCCImport,
+                   BazelCCProtoLibrary, BazelGenRuleTarget,
+                   BazelGRPCCCProtoLibrary, BazelProtoLibrary, BazelTarget,
+                   ExportedFile, ShBinaryBazelTarget)
 from visitor import VisitorContext
 
-VisitorType = Callable[["BuildTarget", "VisitorContext", bool], None]
+VisitorType = Callable[["BuildTarget", "VisitorContext", bool], bool]
 TargetType = Enum(
     "TargetType", ["other", "unknown", "known", "external", "manually_generated"]
 )
@@ -27,6 +27,10 @@ class BazelBuildVisitorContext(VisitorContext):
     producer: Optional["Build"] = None
     next_dest: Optional[BaseBazelTarget] = None
     next_current: Optional[BaseBazelTarget] = None
+    currentBuild: Optional["Build"] = None
+
+    def __post_init__(self):
+        self.parentIsPhony = False
 
     def setup_subcontext(self) -> "VisitorContext":
         newCtx = BazelBuildVisitorContext(**self.__dict__)
@@ -120,6 +124,7 @@ class BuildTarget:
         self.is_a_file = False
         self.type = TargetType.other
         self.includes: Optional[List[Tuple[str, str]]] = None
+        self.depends: List[Union[BazelCCImport, "BuildTarget"]] = []
         self.aliases: List[str] = []
 
     def __hash__(self) -> int:
@@ -138,11 +143,15 @@ class BuildTarget:
     def setIncludedFiles(self, files: List[Tuple[str, str]]):
         self.includes = files
 
+    def setDeps(self, deps: List[Union["BuildTarget", "BazelCCImport"]]):
+        self.depends = deps
+
     def markAsManual(self):
         self.type = TargetType.manually_generated
         return self
 
     def markAsExternal(self):
+        logging.info(f"Marking {self.name} as external")
         self.type = TargetType.external
         return self
 
@@ -235,17 +244,35 @@ class BuildTarget:
             and len(self.producedby.depends) == 0
         ):
             try:
-                visitor(self, ctx, False)
+                if not visitor(self, ctx, False):
+                    ctx.cleanup()
+                    return
             except Exception as e:
-                logging.error(f"Error visiting {self.name}: {e}")
+                # it might sounds wrong but producer is set a level above,
+                # when looking at files producer is actually the Build that uses those files
+                if ctx.producer is not None:
+                    usedBy = ctx.producer.rulename.name
+                else:
+                    usedBy = "unknown"
+
+                logging.error(f"Error visiting {self.name} used by {usedBy}: {e} ")
                 raise
         if self.producedby:
             for el in sorted(self.producedby.inputs):
                 newctx = ctx.setup_subcontext()
+                newctx.producer = self.producedby
+                if ctx.producer is not None and ctx.producer.rulename.name == "phony":
+                    newctx.parentIsPhony = True
                 el.visitGraph(visitor, newctx)
             for el in sorted(self.producedby.depends):
                 if not el.depsAreVirtual():
                     newctx = ctx.setup_subcontext()
+                    newctx.producer = self.producedby
+                    if (
+                        ctx.producer is not None
+                        and ctx.producer.rulename.name == "phony"
+                    ):
+                        newctx.parentIsPhony = True
                     el.visitGraph(visitor, newctx)
         # call cleanup() to clean the context once a node has been visited
         ctx.cleanup()
@@ -333,21 +360,33 @@ class Build:
         el: "BuildTarget",
         ctx: BazelBuildVisitorContext,
     ):
+        # logging.info(f"handleFileForBazelGen {el.name}")
         if not ctx.dest:
             # It can happen that .o are not connected to a real library or binary but just
             # to phony targets in this case "dest" is NotImplemented
             # logging.warn(f"{el} is no connected to a non phony target")
+            logging.error(
+                f"{el.name} is a file that is connected to a phony target {ctx.producer}, it should be filtered upstream, ignoring still"
+            )
             return
         if el.name.endswith(".h") or el.name.endswith(".hpp"):
+            # TODO I have the feeling that we could extrapolate the location of the header here
+            # FIXME Not clear if this is ever visted
+            logging.info(f"Handling generated file header {el.name}")
             if isinstance(ctx.dest, BazelTarget):
                 ctx.dest.addHdr(cls._genExportedFile(el.shortName, ctx.dest.location))
             else:
                 logging.warn(
                     f"{el} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
                 )
+        elif el.name.endswith(".proto") and el.includes is None:
+            logging.warn(f"{el.name} is a protobuf and includes is none")
         elif el.name.endswith(".proto") and el.includes is not None:
             ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
+            # Protobuf shouldn't have additional dependencies, so let's skip parsing el.deps
 
+            # I don't remember what are the includes in the case of a protobuf
+            logging.info(f"{el.name} is a protobuf and includes are {el.includes}")
             if len(el.includes) == 0:
                 return
             t = BazelProtoLibrary(f"sub_{ctx.dest.name}", ctx.dest.location)
@@ -367,25 +406,41 @@ class Build:
             # if it's a "" include then we look first in the path where the file is and then
             # in the path specified with -I
             ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
+            for imp in el.depends:
+                ctx.dest.addDep(imp)
+
             if el.includes is None:
                 return
-            logging.info(f"Handling includes for {el.name}")
             incDirs = set()
+            workDir = None
+            if el.producedby is not None:
+                workDir = el.producedby.vars.get("cmake_ninja_workdir", "")
             for i, d in el.includes:
+                logging.info(f"include {i} dir {d}")
                 incDirs.add(d)
-                # TODO ensure that we don't have relative path
+                generated = False
+                if d.startswith(ctx.rootdir):
+                    includeDir = d.replace(ctx.rootdir, "")
+                elif d.startswith("/") and workDir is not None:
+                    includeDir = d.replace(workDir, "")
+                    generated = True
+                else:
+                    # Maybe we should look for system headers
+                    # FIXME deal with cc_imports here too
+                    logging.error(f"{el.name} depends on {i} in {d}")
+                    includeDir = "This is wrong"
+
                 if isinstance(ctx.dest, BazelTarget):
-                    # FIXME !!! this is wrong the name of the generated file that we create
-                    ctx.dest.addHdr(cls._genExportedFile(i, ctx.dest.location))
+                    ctx.dest.addHdr(
+                        cls._genExportedFile(i, ctx.dest.location),
+                        (includeDir, generated),
+                    )
                 else:
                     logging.warn(
                         f"{i} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
                     )
             if not isinstance(ctx.dest, BazelTarget):
                 return
-            if len(incDirs) > 0:
-                for d in list(incDirs):
-                    ctx.dest.addCopt(f"-I {d.replace(ctx.rootdir, '')}")
 
     @classmethod
     def handleManuallyGeneratedForBazelGen(
@@ -460,6 +515,17 @@ class Build:
             ctx.dest = tmp
             ctx.next_dest = tmp
 
+    def canGenerateFinal(self) -> bool:
+        cmd = self.getCoreCommand()
+        if cmd is None:
+            return False
+        if self.isCPPCommand(cmd) and self.vars.get("LINK_FLAGS") is not None:
+            return True
+        if self.isCPPCommand(cmd) and "-c" not in cmd:
+            return True
+
+        return False
+
     def _handleCustomCommandForBazelGen(
         self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
     ):
@@ -477,8 +543,12 @@ class Build:
             cmd = re.sub(regex, "", cmd)
             logging.info(f"Handling custom command {cmd}")
             cmdCopy = cmd
-            for i in self.outputs:
-                cmdCopy = cmdCopy.replace(i.name, "")
+
+            # This seems wrong to be doing that ... it leads to some arguments being striped of
+            # their final filename
+            # for i in self.outputs:
+            # FIXME comment why we are doing that
+            # cmdCopy = cmdCopy.replace(i.name, "")
             arr: List[str] = list(filter(lambda x: x != "", cmdCopy.split(" ")))
 
             for e in arr[1:]:
@@ -487,11 +557,13 @@ class Build:
             outDirs = set()
             outFiles = set()
             for elm in self.outputs:
-                logging.info(f"Adding output {elm.shortName}")
-                outDirs.add(os.path.dirname(elm.shortName))
-                outFiles.add(elm.shortName)
+                name = elm.shortName
+                if name.startswith(location + "/"):
+                    name = name.replace(location + "/", "")
+                outDirs.add(os.path.dirname(name))
+                outFiles.add(name)
                 genTarget.addOut(
-                    elm.shortName,
+                    name,
                 )
             logging.info(
                 f"Current build path for target: {TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)}"
@@ -500,29 +572,53 @@ class Build:
             # to handle it
             cmd = cmd.replace(self.vars.get("cmake_ninja_workdir", ""), "")
             countRewrote = 0
+            countInput = 0
+            countOptions = 0
 
             alteredArgs = []
             command = arr[0]
             if command.endswith(".py"):
+                lastArgIsOption = False
                 for arg in arr[1:]:
+                    if arg.startswith("-"):
+                        # There will be an issue with options that take multiple values ie --foo bar
+                        # baz biz
+                        lastArgIsOption = True
+                        alteredArgs.append(arg)
+                        countOptions += 1
+                        continue
+
                     found = False
                     for outFile in outFiles:
                         if outFile == os.path.basename(arg) or outFile.endswith(
                             os.path.sep + os.path.basename(arg)
                         ):
-                            logging.info(f"{arg} => {outFile}")
+                            logging.info(f"Mapping arg: {arg} to ouput: {outFile}")
                             prefix = ":" if not outFile.startswith(":") else ""
                             alteredArgs.append(f"$(location {prefix}{outFile})")
                             countRewrote += 1
                             found = True
+                            break
+
+                    if lastArgIsOption and not found:
+                        # assume that this argument is an option for the last option
+                        alteredArgs.append(arg)
+                        countOptions += 1
+                        continue
+
+                    lastArgIsOption = False
                     if not found:
+                        if os.path.exists(f"{ctx.rootdir}/{arg}"):
+                            countInput += 1
+                        else:
+                            logging.info(f"{arg} not found in the output hope it's ok")
                         alteredArgs.append(arg)
                 # Generate a shell script to run the custom command
                 buildTarget = BazelGenRuleTarget(f"{name}_cmd_build", location)
                 buildTarget.addOut(f"{name}_cmd.sh")
                 # Add the sha1 of all inputs to force rebuild if intput file changes
 
-                if countRewrote == len(arr[1:]):
+                if (countInput + countRewrote + countOptions) == len(arr[1:]):
 
                     def genShBinaryScript(rootdir: str, pycommand: str) -> str:
                         return f"""
@@ -530,6 +626,10 @@ echo -ne '#!/bin/bash \\n\\
 #set -x\\n\\
 cur=$$(pwd)\\n\\
 cd {rootdir}\\n\\
+# Create the symlink to the bazel-out directory\\n\\
+if [ ! -e bazel-out ]; then\\n\\
+    ln -s $$cur/bazel-out bazel-out\\n\\
+fi\\n\\
 export PYTHONPATH={rootdir}:$$PYTHONPATH\\n\\
 python3 {pycommand} $$@ \\n\\
 ' > $@
@@ -538,7 +638,8 @@ chmod a+x $@
 
                 else:
                     logging.warn(
-                        "Need to write the function for dealing with non fully rewritten arguments"
+                        f"Need to write the function for dealing with non fully rewritten arguments for {el.name}"
+                        f", {countInput}, {countRewrote}, {countOptions} {len(arr[1:])}"
                     )
 
                 buildTarget.cmd = genShBinaryScript(ctx.rootdir, command)
@@ -566,13 +667,13 @@ chmod a+x $@
             assert isinstance(tmp, BazelGenRuleTarget)
             genTarget = tmp
 
-        outs = genTarget.getOutputs(
-            el.shortName,
-            TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName) + "/",
-        )
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName) + "/"
+        outs = genTarget.getOutputs(el.shortName, location)
         for t in outs:
             if ctx.dest is not None:
                 if t.name.endswith(".h"):
+                    # Figure out if we need some strip_include_prefix by matching the file
+                    # with the diffrent -I flags from the command line
                     assert isinstance(ctx.dest, BazelTarget)
                     ctx.dest.addHdr(t)
                 if (
@@ -662,6 +763,7 @@ chmod a+x $@
                 t = BazelTarget(
                     "cc_shared_library", el.shortName.replace("/", "_"), location
                 )
+
                 t.addPrefixIfRequired = False
                 t.addDep(staticLibTarget)
                 ctx.bazelbuild.bazelTargets.add(staticLibTarget)
@@ -702,6 +804,31 @@ chmod a+x $@
             self._handleCPPLinkCommand(el, cmd, ctx)
             return
         if self.isCPPCommand(cmd) and "-c" in cmd:
+            if ctx.current is None:
+                # Usually when it's none it's because we have pseudo targets
+                return
+            assert ctx.current is not None
+            assert isinstance(ctx.current, BazelTarget)
+            build = el.producedby
+            assert build is not None
+            workDir = self.vars.get("cmake_ninja_workdir", "")
+            for i in build.inputs:
+                for j in i.includes or []:
+                    includeFile = j[0]
+                    includeDirFull = j[1]
+                    generated = False
+                    if includeDirFull.startswith(workDir):
+                        includeDir = includeDirFull.replace(workDir, "")
+                        generated = True
+                    else:
+                        includeDir = includeDirFull.replace(ctx.rootdir, "")
+                    logging.info(
+                        f"Adding include {includeFile} from {includeDir} generated {generated} full dir {j[1]}"
+                    )
+                    ctx.current.addHdr(
+                        build._genExportedFile(includeFile, ctx.current.location),
+                        (includeDir, generated),
+                    )
             assert len(self.outputs) == 1
             if ".grpc.pb.cc.o" in self.outputs[0].name:
                 self._handleGRPCCCProtobuf(ctx, el)
@@ -729,10 +856,42 @@ chmod a+x $@
 
     def __repr__(self) -> str:
         return (
-            f"{' '.join([str(i) for i in self.inputs])} + "
-            f"{' '.join([str(i) for i in self.depends])} => "
+            f"{' '.join([str(i) for i in self.inputs])} "
+            + f"{' '.join([str(i) for i in self.depends])} => "
             f"{self.rulename.name} => {' '.join([str(i) for i in self.outputs])}"
         )
+
+    def getRawcommand(self) -> str:
+        return self.rulename.vars.get("COMMAND", "")
+
+    def getCoreCommand(self) -> Optional[str]:
+        command = self.rulename.vars.get("command")
+        if command is None:
+            return None
+        c2 = self._resolveName(command, ["in", "out", "TARGET_FILE"])
+        if c2 != command:
+            command = c2
+        arr = command.split("&&")
+        found = False
+
+        for cmd in arr:
+            if self.rulename.name == "CUSTOM_COMMAND":
+                for fin in self.inputs:
+                    if fin.name.endswith("atlas_tuples.yml"):
+                        logging.info(
+                            f"Found atlas_tuples.yml in {cmd} {fin.name in cmd} {fin.is_a_file} pouet"
+                        )
+                    if fin.is_a_file:
+                        if fin.name in cmd:
+                            found = True
+                            break
+            if "$in" in cmd and ("$out" in cmd or "$TARGET_FILE" in cmd):
+                found = True
+                break
+
+        if found:
+            return cmd
+        return None
 
     def _resolveName(self, name: str, exceptVars: Optional[List[str]] = None) -> str:
         regex = r"\$\{?([\w+]+)\}?"
