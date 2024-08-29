@@ -2,8 +2,11 @@
 import argparse
 import logging
 import os
+import subprocess
 import sys
+from typing import List
 
+from cc_import_parse import parseCCImports
 from ninjabuild import genBazelBuildFiles, getBuildTargets
 
 
@@ -31,7 +34,7 @@ def main():
     )
     parser.add_argument(
         "--imports",
-        default="",
+        action="append",
         help="A file containing a list of cc_imports to be added to the BUILD files",
     )
     args = parser.parse_args()
@@ -48,9 +51,27 @@ def main():
     with open(filename, "r") as f:
         raw_ninja = f.readlines()
 
-    if args.imports != "":
-        with open(args.imports, "r") as f:
-            raw_imports = f.readlines()
+    raw_imports = []
+    location = ""
+    if len(args.imports) > 0:
+        for i in args.imports:
+            if not os.path.exists(i):
+                logging.fatal(f"Imports file {i} does not exist")
+                sys.exit(-1)
+            p = os.path.dirname(i)
+            # Skip the trailing /
+            loc = p.replace(rootdir, "")[1:]
+            if location != "" and loc != location:
+                raise Exception(
+                    "Not all the cc_imports files are in the same place current: {location} new: {loc}"
+                )
+            location = loc
+
+            with open(i, "r") as f:
+                raw_imports.extend(f.readlines())
+
+    cc_imports = parseCCImports(raw_imports, location)
+    compilerIncludes = getCompilerIncludesDir()
 
     prefix = ""
     if args.prefix != "":
@@ -73,12 +94,29 @@ def main():
             remap[fromPath] = toPath
 
     top_levels_targets = getBuildTargets(
-        raw_ninja, cur_dir, filename, manually_generated, rootdir, prefix, remap
+        raw_ninja,
+        cur_dir,
+        filename,
+        manually_generated,
+        rootdir,
+        prefix,
+        remap,
+        cc_imports,
+        compilerIncludes,
     )
     logging.info("Generating Bazel BUILD files from buildTargets")
     output = genBazelBuildFiles(top_levels_targets, rootdir)
     logging.info("Done")
     print(output)
+
+
+def getCompilerIncludesDir(compiler: str = "clang++-18") -> List[str]:
+    cmd = f"""echo "" |{compiler} -Wp,-v -x c++ - -fsyntax-only  2>&1 |sed -n -e '/^\\s\\+/p'  | sed 's/^[ \\t]*//'"""
+    ret: List[str] = []
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    ret.extend(result.stdout.split("\n"))
+
+    return ret
 
 
 if __name__ == "__main__":

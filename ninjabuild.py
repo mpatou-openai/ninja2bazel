@@ -1,10 +1,13 @@
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
-from typing import Any, Dict, List, Optional
+import tempfile
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from bazel import BazelBuild
+from bazel import BazelBuild, BazelCCImport
 from build import (Build, BuildTarget, Rule, TargetType,
                    TopLevelGroupingStrategy)
 from build_visitor import (BazelBuildVisitorContext, BuildVisitor,
@@ -30,6 +33,21 @@ IGNORED_TARGETS = [
 ]
 
 
+def isCPPLikeFile(name: str) -> bool:
+    for e in [".cc", ".cpp", ".h", ".hpp"]:
+        if name.endswith(e):
+            return True
+
+    return False
+
+
+def isProtoLikeFile(name: str) -> bool:
+    for e in [".proto"]:
+        if name.endswith(e):
+            return True
+    return False
+
+
 class NinjaParser:
     def __init__(self, codeRootDir: str):
         self.codeRootDir = codeRootDir
@@ -48,14 +66,20 @@ class NinjaParser:
         self.contexts: List[str] = []
         self.currentContext: str = ""
         self.initialDirectory = ""
+        self.ran: Set[Tuple[str, str]] = set()
+        self.cacheHeaders: Dict[
+            str, Tuple[Set[Tuple[str, str]], Set[str], Set[BazelCCImport]]
+        ] = {}
 
-    def getShortName(
-        self,
-        name,
-    ):
+    def getShortName(self, name, workDir=None):
         if name.startswith(self.codeRootDir):
             return name[len(self.codeRootDir) :]
-        s = self.vars[self.currentContext].get("cmake_ninja_workdir", "")
+        if workDir is not None:
+            s = workDir
+            if not s.endswith(os.path.sep):
+                s += os.path.sep
+        else:
+            s = self.vars[self.currentContext].get("cmake_ninja_workdir", "")
 
         # TODO find a way to for generated files to figure out the best prefix
         if len(s) > 0 and name.startswith(s):
@@ -179,6 +203,8 @@ class NinjaParser:
                 continue
             target.append(arr[j])
 
+        # TODO we need to do something with the order only deps
+        # More often than not they provide headers
         if rulename == "phony":
             if len(raw_inputs) == 0:
                 newraw_depends = []
@@ -194,6 +220,8 @@ class NinjaParser:
                 p = f"{s}"
             else:
                 p = s
+            if s.endswith("atlas_tuples.yml"):
+                logging.info(f"looking at atlas_tuples.yml in {s} {p}")
             if os.path.exists(p):
                 realPath = os.path.realpath(p)
                 if (
@@ -208,7 +236,7 @@ class NinjaParser:
                     logging.debug(f"Marking {s} as an known dependency")
                     inputs.append(BuildTarget(s, self.getShortName(s)).markAsFile())
                 else:
-                    logging.info(f"Marking {s} as an external dependency {realPath}")
+                    logging.debug(f"Marking {s} as an external dependency {realPath}")
                     inputs.append(BuildTarget(s, self.getShortName(s)).markAsExternal())
             # Massive hack: assume that files ending with .c/cc with a folder name third-party
             # exists
@@ -232,7 +260,11 @@ class NinjaParser:
         for d in raw_depends:
             v = self.all_outputs.get(d)
             if not v:
-                v = BuildTarget(d, self.getShortName(s))
+                try:
+                    v = BuildTarget(d, self.getShortName(d))
+                except Exception as _:
+                    logging.error("Couldn't find a target for {d}")
+                    raise
                 v.markAsExternal()
             depends.append(v)
 
@@ -279,33 +311,144 @@ class NinjaParser:
         cur_dir = os.path.dirname(os.path.abspath(filename))
         self.parse(raw_ninja, cur_dir)
 
+    def executeGenerator(self, build: Build, target: BuildTarget):
+        cmd = build.getCoreCommand()
+        if cmd is None:
+            if " cp " in build.vars.get(
+                "COMMAND", ""
+            ) or "/bin/cmake" in build.vars.get("COMMAND", ""):
+                logging.warning(
+                    f"Command for {target.name}: {build.vars.get('COMMAND')} is not a \"core\" one"
+                )
+            return
+        cmd = cmd.strip()
+        if cmd.startswith("cp "):
+            return
+        s = build.vars.get("cmake_ninja_workdir", "")
+        cmd = re.sub(rf"{s}", "", cmd)
+
+        tempDir = tempfile.mkdtemp()
+        cmd = cmd.strip()
+        os.environ["PYTHONPATH"] = (
+            os.environ.get("PYTHONPATH", "") + ":" + self.codeRootDir
+        )
+        exe = cmd.split(" ")
+        if exe[0].endswith("/protoc"):
+            # skip protoc
+            return
+        if exe[0].endswith(".py"):
+            cmd = f"python3 {cmd}"
+
+        if (cmd, s) in self.ran:
+            return
+        else:
+            self.ran.add((cmd, s))
+        cwd = os.getcwd()
+        os.chdir(tempDir)
+        logging.info(f"Running {cmd}")
+        res = subprocess.run(cmd, shell=True)
+        os.chdir(cwd)
+        if res.returncode != 0:
+            logging.warn(f"Got an exception when trying to run {cmd} in {tempDir}")
+            return
+
+        return tempDir
+
+    def finiliazeHeadersForFile(
+        self, target: BuildTarget, f: str, fileFolder: str, tempTopFolder: str
+    ):
+
+        build = target.producedby
+        if not build:
+            return
+        workDir = build.vars.get("cmake_ninja_workdir", "")
+        if workDir.endswith(os.path.sep):
+            workDir = workDir[:-1]
+        # logging.info(f"Found {f} generated file")
+        if isCPPLikeFile(f):
+            if self.cacheHeaders.get(f):
+                logging.debug(f"Already processed {f}")
+                return
+
+            includes = None
+            for b in target.usedbybuilds:
+                includes = b.vars.get("INCLUDES", "")
+                if includes != "":
+                    includes = includes.replace(
+                        workDir,
+                        tempTopFolder,
+                    )
+                    # logging.info(f"Found includes {includes}")
+                    break
+            if includes is None:
+                logging.warn(
+                    f"No includes for {target.name} using cmd {build.getCoreCommand()}"
+                )
+                includes = ""
+            headers, notFoundHeaders, neededImports = findCPPIncludes(
+                os.path.sep.join([fileFolder, f]),
+                includes,
+                self.compilerIncludes,
+                self.cc_imports,
+            )
+            logging.info(f"Found {headers} headers for generated file {f}")
+            if len(notFoundHeaders) > 0 and includes != "":
+                logging.warning(
+                    f"Couldn't find {notFoundHeaders} headers for generated file {f}"
+                )
+            for i in build.outputs:
+                if not (i.name.endswith(f) and len(headers) > 0):
+                    continue
+                logging.debug(f"Setting headers for {i.name} {len(headers)}")
+                allIncludes = []
+                for h in list(headers):
+                    name = self.getShortName(
+                        h[0].replace(tempTopFolder, workDir), workDir
+                    )
+                    includeDir = h[1].replace(tempTopFolder, workDir)
+                    allIncludes.append((name, includeDir))
+                i.setIncludedFiles(allIncludes)
+                i.setDeps(list(neededImports))
+            self.cacheHeaders[f] = (headers, notFoundHeaders, neededImports)
+
     def finalizeHeaders(self, current_dir: str):
-        def isCPPLikeFile(name: str) -> bool:
-            for e in [".cc", ".cpp", ".h", ".hpp"]:
-                if name.endswith(e):
-                    return True
-
-            return False
-
-        def isProtoLikeFile(name: str) -> bool:
-            for e in [".proto"]:
-                if name.endswith(e):
-                    return True
-            return False
-
         for t in self.all_outputs.values():
-            if not t.producedby:
+            build = t.producedby
+            if not build:
                 continue
-            for i in t.producedby.inputs:
+            workDir = build.vars.get("cmake_ninja_workdir", "")
+            if build.rulename.name == "CUSTOM_COMMAND":
+                ret = self.executeGenerator(build, t)
+                # TODO do it only once per build not for all the files generated by this build ...
+                if ret is None:
+                    continue
+                for dirpath, dirname, files in os.walk(ret):
+                    for f in files:
+                        self.finiliazeHeadersForFile(t, f, dirpath, ret)
+                try:
+                    shutil.rmtree(ret)
+                except Exception as _:
+                    logging.warn(f"Couldn't remove {ret}")
+                    pass
+
+            for i in build.inputs:
                 if i.is_a_file and isCPPLikeFile(i.name):
-                    includes = t.producedby.vars.get("INCLUDES", "")
-                    headers = findCPPIncludes(i.name, includes)
+                    includes = build.vars.get("INCLUDES", "")
+                    headers, notFoundHeaders, neededImports = findCPPIncludes(
+                        i.name, includes, self.compilerIncludes, self.cc_imports
+                    )
+                    if len(notFoundHeaders) > 0:
+                        pass
+                        # logging.warning( f"Couldn't find {notFoundHeaders} headers for {i.name}")
                     i.setIncludedFiles(
-                        [(self.getShortName(h[0]), h[1]) for h in headers]
+                        [
+                            (self.getShortName(h[0], workDir), h[1])
+                            for h in list(headers)
+                        ]
                     )
                 if i.is_a_file and isProtoLikeFile(i.name):
                     includes_dirs: List[str] = []
-                    for part in t.producedby.vars.get("COMMAND", "").split("&&"):
+                    for part in build.vars.get("COMMAND", "").split("&&"):
                         if "/protoc" in part:
                             regex = r"-I ([^ ]+)"
                             matches = re.findall(regex, part)
@@ -313,10 +456,9 @@ class NinjaParser:
 
                     protos = findProtoIncludes(i.name, includes_dirs)
                     includesFiles = []
-                    # TODO put everything in a proto library
                     for p in protos:
-                        f = self.getShortName(p[0])
-                        d = self.getShortName(p[1])
+                        f = self.getShortName(p[0], workDir)
+                        d = self.getShortName(p[1], workDir)
                         f = f.replace(d + os.path.sep, "")
                         includesFiles.append((f, d))
                     i.setIncludedFiles(includesFiles)
@@ -390,6 +532,12 @@ class NinjaParser:
             logging.debug(f"{line} {len(line)}")
         self.directories.pop()
 
+    def setCCImports(self, cc_imports: List[BazelCCImport]):
+        self.cc_imports = cc_imports
+
+    def setCompilerIncludes(self, compilerIncludes: List[str]):
+        self.compilerIncludes = compilerIncludes
+
 
 def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
     real_top_targets = []
@@ -433,7 +581,7 @@ def genBazel(buildTarget: BuildTarget, bb: BazelBuild, rootdir: str):
     else:
         dir = f"{rootdir}/"
 
-    ctx = BazelBuildVisitorContext(dir, bb)
+    ctx = BazelBuildVisitorContext(False, dir, bb)
 
     visitor = BuildVisitor.getVisitor()
 
@@ -448,6 +596,8 @@ def getBuildTargets(
     codeRootDir: str,
     directoryPrefix: str,
     remap: Dict[str, str],
+    cc_imports: List[BazelCCImport],
+    compilerIncludes: List[str],
 ) -> List[BuildTarget]:
     TopLevelGroupingStrategy(directoryPrefix)
 
@@ -456,6 +606,8 @@ def getBuildTargets(
     parser.setContext(ninjaFileName)
     parser.setRemapPath(remap)
     parser.setDirectoryPrefix(directoryPrefix)
+    parser.setCompilerIncludes(compilerIncludes)
+    parser.setCCImports(cc_imports)
     parser.parse(raw_ninja, dir)
     parser.endContext(ninjaFileName)
 
