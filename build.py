@@ -266,8 +266,16 @@ class BuildTarget:
             for el in sorted(self.producedby.inputs):
                 newctx = ctx.setup_subcontext()
                 newctx.producer = self.producedby
+                newctx.parentIsPhony = False
                 if ctx.producer is not None and ctx.producer.rulename.name == "phony":
                     newctx.parentIsPhony = True
+                elif self.producedby.rulename.name == "phony" and ctx.producer is None:
+                    # We don't have a producer set, this means that self is the output of topLevel
+                    # build and this build is phony (ie. all)
+                    builds = [b.outputs[0] for b in self.usedbybuilds]
+                    logging.info(
+                        f"{self.name} is phony ctx.producer = {ctx.producer}, parent build(s): {builds}"
+                    )
                 el.visitGraph(visitor, newctx)
             for el in sorted(self.producedby.depends):
                 if not el.depsAreVirtual():
@@ -278,6 +286,8 @@ class BuildTarget:
                         and ctx.producer.rulename.name == "phony"
                     ):
                         newctx.parentIsPhony = True
+                    else:
+                        newctx.parentIsPhony = False
                     el.visitGraph(visitor, newctx)
         # call cleanup() to clean the context once a node has been visited
         ctx.cleanup()
