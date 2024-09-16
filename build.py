@@ -126,6 +126,11 @@ class BuildTarget:
         self.includes: Optional[List[Tuple[str, str]]] = None
         self.depends: List[Union[BazelCCImport, "BuildTarget"]] = []
         self.aliases: List[str] = []
+        # Is this target the first level (ie. one of the final output of the build) ?
+        self.topLevel = False
+
+    def markTopLevel(self):
+        self.topLevel = True
 
     def __hash__(self) -> int:
         return self.name.__hash__()
