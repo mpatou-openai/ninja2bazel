@@ -53,20 +53,24 @@ class BazelBuild:
         self.bazelTargets: Set["BaseBazelTarget"] = set()
 
     def genBazelBuildContent(self) -> str:
-        topContent = ['load(":helpers.bzl", "add_bazel_out_prefix")']
+        topContent: Set[str] = set()
+        topContent.add('load(":helpers.bzl", "add_bazel_out_prefix")')
+        logging.info(f"Top content is {topContent}")
         content = []
         for t in sorted(self.bazelTargets):
             try:
                 content.append(f"# Location {t.location}")
                 content.extend(t.asBazel())
-                topContent.append(t.getGlobalImport())
+                topContent.add(t.getGlobalImport())
             except Exception as e:
                 logging.error(f"While generating Bazel content for {t.name}: {e}")
+                raise
             content.append("")
-        topContent = list(filter(lambda x: x != "", topContent))
+        logging.info(f"Top content is {topContent}")
+        topContent = set(filter(lambda x: x != "", topContent))
         if len(topContent) > 0:
             # Force empty line
-            topContent.append("")
+            topContent.add("")
         return "\n".join(topContent) + "\n" + "\n".join(content)
 
 
@@ -194,7 +198,7 @@ class BazelTarget(BaseBazelTarget):
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.targetName()}",')
-        deps_headers = self.getAllHeaders(deps_only=True)
+        deps_headers = list(self.getAllHeaders(deps_only=True))
         headers = []
         data = []
         for h in self.hdrs:
@@ -321,6 +325,10 @@ class BazelCCProtoLibrary(BaseBazelTarget):
         assert isinstance(dep, BazelProtoLibrary)
         self.deps.add(dep)
 
+    def getAllHeaders(self, deps_only=False):
+        # FIXME
+        return []
+
     def asBazel(self) -> List[str]:
         ret = []
         ret.append(f"{self.type}(")
@@ -349,6 +357,10 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
     def addSrc(self, dep: BaseBazelTarget):
         assert isinstance(dep, BazelProtoLibrary)
         self.srcs.add(dep)
+
+    def getAllHeaders(self, deps_only=False):
+        # FIXME
+        return []
 
     def getGlobalImport(self):
         return 'load("@com_github_grpc_grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")'
@@ -396,6 +408,10 @@ class BazelProtoLibrary(BaseBazelTarget):
     def addDep(self, target: Union[BaseBazelTarget, BazelCCImport]):
         assert isinstance(target, BaseBazelTarget)
         self.deps.add(target)
+
+    def getAllHeaders(self, deps_only=False):
+        # FIXME
+        return []
 
     def asBazel(self) -> List[str]:
         ret = []
