@@ -1,9 +1,8 @@
 import logging
 import os
 import re
-from collections import defaultdict
 from functools import total_ordering
-from typing import DefaultDict, Dict, List, Optional, Set, Union
+from typing import Dict, List, Optional, Set, Union
 
 IncludeDir = tuple[str, bool]
 
