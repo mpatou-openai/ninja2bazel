@@ -107,7 +107,10 @@ def main():
     logging.info("Generating Bazel BUILD files from buildTargets")
     output = genBazelBuildFiles(top_levels_targets, rootdir)
     logging.info("Done")
-    print(output)
+    for name, content in output.items():
+        logging.info(f"Wrote {rootdir}{name}{os.path.sep}BUILD.bazel")
+        with open(f"{rootdir}{name}{os.path.sep}BUILD.bazel", "w") as f:
+            f.write(content)
 
 
 def getCompilerIncludesDir(compiler: str = "clang++-18") -> List[str]:
