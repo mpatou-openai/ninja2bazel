@@ -1,8 +1,9 @@
 import logging
 import os
 import re
+from collections import defaultdict
 from functools import total_ordering
-from typing import Dict, List, Optional, Set, Union
+from typing import DefaultDict, Dict, List, Optional, Set, Union
 
 IncludeDir = tuple[str, bool]
 
@@ -52,26 +53,37 @@ class BazelBuild:
     def __init__(self: "BazelBuild"):
         self.bazelTargets: Set["BaseBazelTarget"] = set()
 
-    def genBazelBuildContent(self) -> str:
-        topContent: Set[str] = set()
-        topContent.add('load(":helpers.bzl", "add_bazel_out_prefix")')
+    def genBazelBuildContent(self) -> Dict[str, str]:
+        ret: Dict[str, str] = {}
+        topContent: Dict[str, Set[str]] = {}
+        tmp = {'load(":helpers.bzl", "add_bazel_out_prefix")'}
         logging.info(f"Top content is {topContent}")
-        content = []
+        content: Dict[str, List[str]] = {}
+        lastLocation = None
         for t in sorted(self.bazelTargets):
             try:
-                content.append(f"# Location {t.location}")
-                content.extend(t.asBazel())
-                topContent.add(t.getGlobalImport())
+                body = content.get(t.location, [])
+                body.append(f"# Location {t.location}")
+                body.extend(t.asBazel())
+                content[t.location] = body
+                top = topContent.get(t.location, tmp)
+                top.add(t.getGlobalImport())
+                topContent[t.location] = tmp
+                lastLocation = t.location
             except Exception as e:
                 logging.error(f"While generating Bazel content for {t.name}: {e}")
                 raise
-            content.append("")
-        logging.info(f"Top content is {topContent}")
-        topContent = set(filter(lambda x: x != "", topContent))
-        if len(topContent) > 0:
-            # Force empty line
-            topContent.add("")
-        return "\n".join(topContent) + "\n" + "\n".join(content)
+            if lastLocation is not None:
+                content[lastLocation].append("")
+        for k, v in topContent.items():
+            top = set(filter(lambda x: x != "", v))
+            if len(top) > 0:
+                # Force empty line
+                top.add("")
+            ret[k] = "\n".join(top)
+        for k, v2 in content.items():
+            ret[k] += "\n".join(v2)
+        return ret
 
 
 @total_ordering
