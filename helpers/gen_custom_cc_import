@@ -48,7 +48,7 @@ class CLibrary:
         chuncks.append(f"    hdrs = {headers},")
         chuncks.append("    system_provided = 1,")
         if len(self.static) > 0:
-            chuncks.append(f"    static_libs = {list(self.static)[0]},")
+            chuncks.append(f"    static_library = {list(self.static)[0]},")
 
         chuncks.append(")")
         return "\n".join(chuncks)

@@ -50,18 +50,23 @@ class BuildVisitor:
     @classmethod
     def getVisitor(cls) -> VisitorType:
         def visitor(el: "BuildTarget", ctx: VisitorContext, _var: bool = False):
+            # build is the build that produce this element that is used
+            # by the ctx.producer build
             build = el.producedby
+            parentBuild = ctx.producer
+
             assert isinstance(ctx, BazelBuildVisitorContext)
-            if ctx.producer is not None and ctx.producer.rulename.name == "phony":
-                if (
-                    build is not None
-                    and ctx.parentIsPhony
-                    and not build.canGenerateFinal()
-                ):
-                    logging.info(
-                        f"Skipping {el.name} used by {ctx.producer.outputs[0]} because it's a chain of empty targets"
-                    )
-                    return False
+            if parentBuild is not None and parentBuild.rulename.name == "phony":
+                pass
+            if (
+                parentBuild is not None
+                and ctx.parentIsPhony
+                and not parentBuild.canGenerateFinal()
+            ):
+                logging.info(
+                    f"Skipping {el.name} used by {parentBuild.rulename.name} because it's a chain of empty targets"
+                )
+                return False
             if el.producedby is not None:
                 build = el.producedby
                 BuildVisitor.visitProduced(ctx, el, build)

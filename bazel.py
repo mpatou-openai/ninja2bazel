@@ -415,6 +415,7 @@ class BazelProtoLibrary(BaseBazelTarget):
         return 'load("@rules_proto//proto:defs.bzl", "proto_library")'
 
     def addSrc(self, target: BaseBazelTarget):
+        logging.info("addSrc called for proto_library")
         self.srcs.add(target)
 
     def addDep(self, target: Union[BaseBazelTarget, BazelCCImport]):

@@ -16,11 +16,11 @@ def getStanza(shared_lib: str, header: list[str], shared_libs: list[str]) -> str
             break
     txt = ""
     if static_lib is not None:
-        txt = f'    static_library = "{shared_lib}",\n'
+        txt = f'    static_library = "{static_lib}",\n'
     stanza = f"""
 cc_import(
     name = "{name}",
-    interface_library= "{shared_lib}",
+    interface_library = "{shared_lib}",
     hdrs = {list(headers)},
     system_provided = 1,
 {txt})"""

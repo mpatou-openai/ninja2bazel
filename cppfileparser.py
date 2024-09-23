@@ -4,6 +4,7 @@ import re
 from typing import Dict, Generator, List, Optional, Set, Tuple
 
 from bazel import BazelCCImport
+from helpers import resolvePath
 
 
 def findAllHeaderFiles(current_dir: str) -> Generator[str, None, None]:
@@ -20,24 +21,6 @@ def parseIncludes(includes: str) -> Set[str]:
 
 cache: Dict[str, Tuple[Set[Tuple[str, str]], Set[str], Set[BazelCCImport]]] = {}
 seen = set()
-
-
-def resolvePath(path: str) -> str:
-    cur = 0
-    split = path.split(os.path.sep)
-    dest: List[str] = []
-    for i, p in enumerate(split):
-        if p == ".":
-            continue
-        if p == "..":
-            if cur > 0:
-                cur -= 1
-                dest.remove(dest[-1])
-        else:
-            dest.append(p)
-            cur += 1
-
-    return os.path.sep.join(dest)
 
 
 def _findCPPIncludeForFile(
@@ -144,7 +127,7 @@ def findCPPIncludes(
                 # full_file_name = os.path.realpath(full_file_name)
                 full_file_name = resolvePath(full_file_name)
                 foundHeaders.append((full_file_name, current_dir))
-                logging.info(f"Checking {full_file_name} for {name}")
+                logging.debug(f"Checking {full_file_name} for {name}")
                 fndHdrs, notFndHdrs, fndImports = findCPPIncludes(
                     full_file_name, includes, compilerIncludes, cc_imports, name
                 )
