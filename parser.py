@@ -11,7 +11,11 @@ from ninjabuild import genBazelBuildFiles, getBuildTargets
 
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s - %(levelname)s - %(message)s - Line: %(lineno)d",
+    )
     parser = argparse.ArgumentParser(description="Process Ninja build input file.")
     parser.add_argument("filename", type=str, help="Ninja build input file")
     parser.add_argument("rootdir", type=str, help="Root directory")

@@ -128,6 +128,7 @@ class BuildTarget:
         self.aliases: List[str] = []
         # Is this target the first level (ie. one of the final output of the build) ?
         self.topLevel = False
+        self.opaque = Optional[object]
 
     def markTopLevel(self):
         self.topLevel = True
@@ -155,8 +156,9 @@ class BuildTarget:
         self.type = TargetType.manually_generated
         return self
 
-    def markAsExternal(self):
-        logging.info(f"Marking {self.name} as external")
+    def markAsExternal(self, quiet=False):
+        if not quiet:
+            logging.info(f"Marking {self.name} as external")
         self.type = TargetType.external
         return self
 
@@ -167,6 +169,9 @@ class BuildTarget:
     def markAsknown(self):
         self.type = TargetType.known
         return self
+
+    def setOpaque(self, o: object):
+        self.opaque = o
 
     def __repr__(self) -> str:
         return self.name
@@ -415,6 +420,7 @@ class Build:
                 t.stripImportPrefix = stripPrefix
         else:
             if el.type == TargetType.external:
+                logging.info(f"Dealing with external dep {el.name} {ctx.dest}")
                 return
             # Not produced aka it's a file
             # we have to parse the file and see if there is any includes
@@ -510,10 +516,24 @@ class Build:
                 logging.info("not a match")
                 return
             proto = match.group(1)
+
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
             t = BazelProtoLibrary(f"{proto}_proto", location)
             ctx.bazelbuild.bazelTargets.add(t)
             self.setAssociatedBazelTarget(t)
+
+            assert el.producedby is not None
+
+            for e in el.producedby.inputs:
+                if e.name.endswith(".proto"):
+                    logging.info(
+                        f"Proto input for {ctx.rootdir} {el.name.replace(ctx.rootdir, '')}: {e.name.replace(ctx.rootdir, '')}"
+                    )
+                    path = e.name.replace(ctx.rootdir, "")
+                    # .replace(location, "")
+                    # if path.startswith("/"):
+                    #     path = path[1:]
+                    t.addSrc(self._genExportedFile(path, location))
             if ctx.dest is not None:
                 ctx.dest.addSrc(t)
             elif ctx.current is not None:

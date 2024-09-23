@@ -52,6 +52,9 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
             if line.startswith("static_library = "):
                 assert current is not None
                 current.setStaticLibrarys(cleanupVar(val))
+            if line.startswith("static_libs = "):
+                assert current is not None
+                current.setStaticLibrarys(cleanupVar(val))
             if line.startswith("hdrs = "):
                 assert current is not None
                 regex = r"([()\[\]])"
