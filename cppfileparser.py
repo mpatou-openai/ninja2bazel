@@ -20,8 +20,26 @@ def parseIncludes(includes: str) -> Set[str]:
     return set(matches)
 
 
-cache: Dict[str, Tuple[Set[Tuple[str, str]], Set[str], Set[BazelCCImport]]] = {}
 seen = set()
+
+
+@dataclass
+class CPPIncludes:
+    foundHeaders: Set[Tuple[str, str]]
+    notFoundHeaders: Set[str]
+    neededImports: Set[BazelCCImport]
+    neededGeneratedTargets: Set[BaseBazelTarget]
+
+    def __add__(self, other: "CPPIncludes") -> "CPPIncludes":
+        return CPPIncludes(
+            self.foundHeaders.union(other.foundHeaders),
+            self.notFoundHeaders.union(other.notFoundHeaders),
+            self.neededImports.union(other.neededImports),
+            self.neededGeneratedTargets.union(other.neededGeneratedTargets),
+        )
+
+
+cache: Dict[str, CPPIncludes] = {}
 
 
 def _findCPPIncludeForFile(
@@ -32,11 +50,9 @@ def _findCPPIncludeForFile(
     name: str,
     cc_imports: List[BazelCCImport],
     compilerIncludes: List[str],
-):
+) -> Tuple[bool, CPPIncludes]:
     found = False
-    neededImports = set()
-    foundHeaders = set()
-    notFoundHeaders = set()
+    ret = CPPIncludes(set(), set(), set(), set())
 
     for d in includes_dirs:
         if d.startswith("/"):
@@ -51,7 +67,7 @@ def _findCPPIncludeForFile(
         for imp in cc_imports:
             if full_file_name in imp.hdrs:
                 logging.info(f"Found {full_file_name} in {imp}")
-                neededImports.add(imp)
+                ret.neededImports.add(imp)
                 found = True
                 break
 
@@ -68,18 +84,16 @@ def _findCPPIncludeForFile(
         if found:
             break
 
-        foundHeaders.add((full_file_name, d))
+        ret.foundHeaders.add((full_file_name, d))
         full_file_name = resolvePath(full_file_name)
 
-        fndHdrs, notFndHdrs, fndImports = findCPPIncludes(
+        cppIncludes = findCPPIncludes(
             full_file_name, includes, compilerIncludes, cc_imports, name
         )
-        foundHeaders.update(fndHdrs)
-        notFoundHeaders.update(notFndHdrs)
-        neededImports.update(fndImports)
+        ret += cppIncludes
         found = True
         break
-    return found, foundHeaders, notFoundHeaders, neededImports
+    return found, ret
 
 
 def findCPPIncludes(
@@ -88,14 +102,15 @@ def findCPPIncludes(
     compilerIncludes: List[str],
     cc_imports: List[BazelCCImport],
     parent: Optional[str] = None,
-) -> Tuple[Set[Tuple[str, str]], Set[str], Set[BazelCCImport]]:
+) -> CPPIncludes:
     key = f"{name} {includes}"
+    ret = CPPIncludes(set(), set(), set(), set())
     # There is sometimes loop, as we don't really implement the #pragma once
     # deal with it
     if key in cache:
         return cache[key]
     if key in seen:
-        return set(), set(), set()
+        return ret
     seen.add(key)
     if includes is not None:
         includes_dirs = parseIncludes(includes)
@@ -105,9 +120,6 @@ def findCPPIncludes(
     logging.debug(f"Handling findCPPIncludes {name}")
     with open(name, "r") as f:
         content = f.readlines()
-    neededImports = set()
-    foundHeaders = []
-    notFoundHeaders: List[str] = []
     for line in content:
         found = False
         match = re.match(r'#\s*include ((?:<|").*(?:>|"))', line)
@@ -127,23 +139,18 @@ def findCPPIncludes(
                 # We need a way of dealing with path with ..
                 # full_file_name = os.path.realpath(full_file_name)
                 full_file_name = resolvePath(full_file_name)
-                foundHeaders.append((full_file_name, current_dir))
+                ret.foundHeaders.add((full_file_name, current_dir))
                 logging.debug(f"Checking {full_file_name} for {name}")
-                fndHdrs, notFndHdrs, fndImports = findCPPIncludes(
+                cppIncludes = findCPPIncludes(
                     full_file_name, includes, compilerIncludes, cc_imports, name
                 )
-                foundHeaders.extend(fndHdrs)
-                notFoundHeaders.extend(notFndHdrs)
-                neededImports.update(fndImports)
+                ret += cppIncludes
             else:
                 if len(includes_dirs) == 0:
-                    cache[key] = (
-                        set(),
-                        set(),
-                        set(),
-                    )
-                    return (set(), set(), set())
-                found, fndHdrs, notFndHdrs, fndImports = _findCPPIncludeForFile(
+                    empty = CPPIncludes(set(), set(), set(), set())
+                    cache[key] = empty
+                    return empty
+                found, cppIncludes = _findCPPIncludeForFile(
                     file,
                     includes_dirs,
                     includes,
@@ -152,18 +159,13 @@ def findCPPIncludes(
                     cc_imports,
                     compilerIncludes,
                 )
-                foundHeaders.extend(fndHdrs)
-                notFoundHeaders.extend(notFndHdrs)
-                neededImports.update(fndImports)
+                ret += cppIncludes
         else:
             if len(includes_dirs) == 0:
-                cache[key] = (
-                    set(),
-                    set(),
-                    set(),
-                )
-                return (set(), set(), set())
-            found, fndHdrs, notFndHdrs, fndImports = _findCPPIncludeForFile(
+                empty = CPPIncludes(set(), set(), set(), set())
+                cache[key] = empty
+                return empty
+            found, cppIncludes = _findCPPIncludeForFile(
                 file,
                 includes_dirs,
                 includes,
@@ -172,9 +174,7 @@ def findCPPIncludes(
                 cc_imports,
                 compilerIncludes,
             )
-            foundHeaders.extend(fndHdrs)
-            notFoundHeaders.extend(notFndHdrs)
-            neededImports.update(fndImports)
+            ret += cppIncludes
         if name.endswith("ilist_node_base.h "):
             logging.info(f"Found {file} in {name} with found = {found}")
 
@@ -192,8 +192,8 @@ def findCPPIncludes(
             logging.info(
                 f"Not found {file} in the compiler includes for {name} wih includes {includes}"
             )
-            notFoundHeaders.append(file)
-    if len(notFoundHeaders) > 0:
-        logging.debug(f"Could not find {set(notFoundHeaders)} in {name}")
-    cache[key] = (set(foundHeaders), set(notFoundHeaders), neededImports)
-    return (set(foundHeaders), set(notFoundHeaders), neededImports)
+            ret.notFoundHeaders.add(file)
+    if len(ret.notFoundHeaders) > 0:
+        logging.debug(f"Could not find {set(ret.notFoundHeaders)} in {name}")
+    cache[key] = ret
+    return ret
