@@ -47,16 +47,40 @@ class BazelCCImport:
     def targetName(self) -> str:
         return f":{self.name}"
 
+    def getGlobalImport(self) -> str:
+        return ""
+
+    def getAllHeaders(self, deps_only=False):
+        # cc_import have headers but we don't include them in the upper target
+        return []
+
+    def asBazel(self) -> List[str]:
+        ret = []
+        ret.append("cc_import(")
+        ret.append(f'    name = "{self.name}",')
+        if self.system_provided:
+            ret.append(f'    system_provided = "{self.system_provided}",')
+            if self.sharedLibrary is not None:
+                ret.append(f'    interface_library = "{self.sharedLibrary}",')
+        else:
+            if self.sharedLibrary is not None:
+                ret.append(f'    shared_library = "{self.sharedLibrary}",')
+        ret.append(f'    hdrs = "{self.hdrs}",')
+        if self.staticLibrary is not None:
+            ret.append(f'    static_library = "{self.staticLibrary}",')
+        ret.append(")")
+
+        return ret
+
 
 class BazelBuild:
     def __init__(self: "BazelBuild"):
-        self.bazelTargets: Set["BaseBazelTarget"] = set()
+        self.bazelTargets: Set[Union["BaseBazelTarget", "BazelCCImport"]] = set()
 
     def genBazelBuildContent(self) -> Dict[str, str]:
         ret: Dict[str, str] = {}
         topContent: Dict[str, Set[str]] = {}
         tmp = {'load(":helpers.bzl", "add_bazel_out_prefix")'}
-        logging.info(f"Top content is {topContent}")
         content: Dict[str, List[str]] = {}
         lastLocation = None
         for t in sorted(self.bazelTargets):
@@ -79,6 +103,7 @@ class BazelBuild:
             if len(top) > 0:
                 # Force empty line
                 top.add("")
+            logging.info(f"Top content is {top}")
             ret[k] = "\n".join(top)
         for k, v2 in content.items():
             ret[k] += "\n".join(v2)

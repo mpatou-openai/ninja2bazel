@@ -217,8 +217,8 @@ class BuildTarget:
             return False
 
         if self.producedby is None and self.type == TargetType.external:
-            logging.debug(f"{self} is an external dependency")
-            return True
+            # logging.debug(f"{self} is an external dependency")
+            return False
 
         if self.producedby is None and not self.is_a_file:
             logging.warning(
@@ -380,6 +380,21 @@ class Build:
         el: "BuildTarget",
         ctx: BazelBuildVisitorContext,
     ):
+        if el.type == TargetType.external and el.opaque is None:
+            logging.info(
+                f"Dealing with external dep {el.name} that doesn't have an opaque"
+            )
+            return
+        if (
+            el.type == TargetType.external
+            and el.opaque is not None
+            and ctx.current is not None
+        ):
+            maybe_cc_import = el.opaque
+            if isinstance(maybe_cc_import, BazelCCImport):
+                ctx.current.addDep(maybe_cc_import)
+                ctx.bazelbuild.bazelTargets.add(maybe_cc_import)
+                return
         # logging.info(f"handleFileForBazelGen {el.name}")
         if not ctx.dest:
             # It can happen that .o are not connected to a real library or binary but just
