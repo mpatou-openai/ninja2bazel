@@ -1,9 +1,10 @@
 import logging
 import os
 import re
+from dataclasses import dataclass
 from typing import Dict, Generator, List, Optional, Set, Tuple
 
-from bazel import BazelCCImport
+from bazel import BaseBazelTarget, BazelCCImport
 from helpers import resolvePath
 
 
