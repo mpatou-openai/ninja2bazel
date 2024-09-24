@@ -12,7 +12,7 @@ from build import (Build, BuildTarget, Rule, TargetType,
                    TopLevelGroupingStrategy)
 from build_visitor import (BazelBuildVisitorContext, BuildVisitor,
                            PrintVisitorContext)
-from cppfileparser import findCPPIncludes
+from cppfileparser import CPPIncludes, findCPPIncludes
 from helpers import resolvePath
 from protoparser import findProtoIncludes
 from visitor import VisitorContext
@@ -69,9 +69,7 @@ class NinjaParser:
         self.initialDirectory = ""
         self.ran: Set[Tuple[str, str]] = set()
         self.externals: Dict[str, BuildTarget] = {}
-        self.cacheHeaders: Dict[
-            str, Tuple[Set[Tuple[str, str]], Set[str], Set[BazelCCImport]]
-        ] = {}
+        self.cacheHeaders: Dict[str, CPPIncludes] = {}
 
     def getShortName(self, name, workDir=None):
         if name.startswith(self.codeRootDir):
@@ -386,9 +384,12 @@ class NinjaParser:
         return None
 
     def finiliazeHeadersForFile(
-        self, target: BuildTarget, f: str, fileFolder: str, tempTopFolder: str
+        self,
+        target: BuildTarget,
+        f: str,
+        fileFolder: str,
+        tempTopFolder: str,
     ):
-
         build = target.producedby
         if not build:
             return
@@ -416,31 +417,35 @@ class NinjaParser:
                     f"No includes for {target.name} using cmd {build.getCoreCommand()}"
                 )
                 includes = ""
-            headers, notFoundHeaders, neededImports = findCPPIncludes(
+            cppIncludes = findCPPIncludes(
                 os.path.sep.join([fileFolder, f]),
                 includes,
                 self.compilerIncludes,
                 self.cc_imports,
             )
-            logging.info(f"Found {headers} headers for generated file {f}")
-            if len(notFoundHeaders) > 0 and includes != "":
+            logging.info(
+                f"Found {cppIncludes.foundHeaders} headers for generated file {f}"
+            )
+            if len(cppIncludes.notFoundHeaders) > 0 and includes != "":
                 logging.warning(
-                    f"Couldn't find {notFoundHeaders} headers for generated file {f}"
+                    f"Couldn't find {cppIncludes.notFoundHeaders} headers for generated file {f}"
                 )
             for i in build.outputs:
-                if not (i.name.endswith(f) and len(headers) > 0):
+                if not (i.name.endswith(f) and len(cppIncludes.foundHeaders) > 0):
                     continue
-                logging.debug(f"Setting headers for {i.name} {len(headers)}")
+                logging.debug(
+                    f"Setting headers for {i.name} {len(cppIncludes.foundHeaders)}"
+                )
                 allIncludes = []
-                for h in list(headers):
+                for h in list(cppIncludes.foundHeaders):
                     name = self.getShortName(
                         h[0].replace(tempTopFolder, workDir), workDir
                     )
                     includeDir = h[1].replace(tempTopFolder, workDir)
                     allIncludes.append((name, includeDir))
                 i.setIncludedFiles(allIncludes)
-                i.setDeps(list(neededImports))
-            self.cacheHeaders[f] = (headers, notFoundHeaders, neededImports)
+                i.setDeps(list(cppIncludes.neededImports))
+            self.cacheHeaders[f] = cppIncludes
 
     def finalizeHeaders(self, current_dir: str):
         for t in self.all_outputs.values():
@@ -465,18 +470,19 @@ class NinjaParser:
             for i in build.inputs:
                 if i.is_a_file and isCPPLikeFile(i.name):
                     includes = build.vars.get("INCLUDES", "")
-                    headers, notFoundHeaders, neededImports = findCPPIncludes(
+                    cppIncludes = findCPPIncludes(
                         i.name, includes, self.compilerIncludes, self.cc_imports
                     )
-                    if len(notFoundHeaders) > 0:
+                    if len(cppIncludes.notFoundHeaders) > 0:
                         pass
-                        # logging.warning( f"Couldn't find {notFoundHeaders} headers for {i.name}")
+                        # logging.warning( f"Couldn't find {cppIncludes.notFoundHeaders} headers for {i.name}")
                     i.setIncludedFiles(
                         [
                             (self.getShortName(h[0], workDir), h[1])
-                            for h in list(headers)
+                            for h in list(cppIncludes.foundHeaders)
                         ]
                     )
+                    i.setDeps(list(cppIncludes.neededImports))
                 if i.is_a_file and isProtoLikeFile(i.name):
                     includes_dirs: List[str] = []
                     for part in build.vars.get("COMMAND", "").split("&&"):
