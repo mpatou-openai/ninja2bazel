@@ -127,8 +127,6 @@ def findCPPIncludes(
             continue
         current_include = match.group(1)
         file = current_include[1:-1]
-        if file.endswith("StringMapEntry.h"):
-            logging.info(f"Found {file} in {name} with found = {found} 2")
 
         if current_include.startswith('"'):
             full_file_name = f"{current_dir}/{file}"
