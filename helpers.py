@@ -7,6 +7,9 @@ def resolvePath(path: str) -> str:
     split = path.split(os.path.sep)
     dest: List[str] = []
     for i, p in enumerate(split):
+        if len(p) == 0 and i > 0:
+            # // case
+            continue
         if p == ".":
             continue
         if p == "..":

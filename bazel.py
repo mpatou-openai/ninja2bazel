@@ -210,6 +210,9 @@ class BazelTarget(BaseBazelTarget):
         self.deps.add(target)
 
     def addHdr(self, target: BaseBazelTarget, includeDir: Optional[IncludeDir] = None):
+        if "//" in target.name:
+            logging.warning(f"There is a double / in {target.name}, fix your code")
+            target.name = target.name.replace("//", "/")
         self.hdrs.add(target)
         if includeDir is not None:
             self.includeDirs.add(includeDir)
