@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from functools import total_ordering
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 from bazel import (BaseBazelTarget, BazelBuild, BazelCCImport,
                    BazelCCProtoLibrary, BazelGenRuleTarget,
@@ -322,10 +322,10 @@ class Build:
         inputs: List[BuildTarget],
         depends: List[BuildTarget],
     ):
-        self.outputs = outputs
-        self.rulename = rulename
-        self.inputs = inputs
-        self.depends = set(depends)
+        self.outputs: List[BuildTarget] = outputs
+        self.rulename: Rule = rulename
+        self.inputs: List[BuildTarget] = inputs
+        self.depends: Set[BuildTarget] = set(depends)
         self.associatedBazelTarget: Optional[BaseBazelTarget] = None
 
         for o in self.outputs:
@@ -385,6 +385,15 @@ class Build:
                 f"Dealing with external dep {el.name} that doesn't have an opaque"
             )
             return
+
+        if len(el.depends) > 0:
+            logging.info(f"Visiting deps for {el.name}")
+            for dep in el.depends:
+                logging.info(f"Visiting dep {dep}")
+                if ctx.dest is not None:
+                    assert isinstance(dep, BazelCCImport)
+                    ctx.dest.addDep(dep)
+                    ctx.bazelbuild.bazelTargets.add(dep)
         if (
             el.type == TargetType.external
             and el.opaque is not None
@@ -442,8 +451,6 @@ class Build:
             # if it's a "" include then we look first in the path where the file is and then
             # in the path specified with -I
             ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
-            for imp in el.depends:
-                ctx.dest.addDep(imp)
 
             if el.includes is None:
                 return
@@ -774,6 +781,7 @@ chmod a+x $@
             self.setAssociatedBazelTarget(t)
             for tgt in ctx.bazelbuild.bazelTargets:
                 if tgt.name == f"{proto}_cc_grpc":
+                    assert isinstance(tgt, BaseBazelTarget)
                     tgt.addDep(t)
             ctx.next_current = t
             ctx.current = t
@@ -828,8 +836,11 @@ chmod a+x $@
             assert isinstance(tmp, BazelTarget)
             t = tmp
             if t.type == "cc_shared_library":
-                tmp = t.deps.pop()
-                assert isinstance(tmp, BazelTarget)
+                # First (and only ?) dep of a cc_shared_library should be a cc_library (so
+                # a BaseBazelTarget
+                tmp2 = t.deps.pop()
+                assert isinstance(tmp2, BazelTarget)
+                tmp = tmp2
             nextCurrent = tmp
 
         if ctx.current is not None:
