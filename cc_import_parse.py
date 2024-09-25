@@ -43,7 +43,7 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
             if line.startswith("name = "):
                 name = cleanupVar(val)
                 current = BazelCCImport(name)
-                current.setLocation(f"//{location}")
+                current.setLocation(f"{location}")
             if line.startswith("interface_library = ") or line.startswith(
                 "shared_library = "
             ):
