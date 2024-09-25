@@ -84,8 +84,8 @@ def _findCPPIncludeForFile(
         if found:
             break
 
-        ret.foundHeaders.add((full_file_name, d))
         full_file_name = resolvePath(full_file_name)
+        ret.foundHeaders.add((full_file_name, d))
 
         cppIncludes = findCPPIncludes(
             full_file_name, includes, compilerIncludes, cc_imports, name
@@ -173,8 +173,6 @@ def findCPPIncludes(
                 compilerIncludes,
             )
             ret += cppIncludes
-        if name.endswith("ilist_node_base.h "):
-            logging.info(f"Found {file} in {name} with found = {found}")
 
         # We don't include compiler includes in the list of includes
         if not found:
