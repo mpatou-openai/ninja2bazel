@@ -178,7 +178,7 @@ class BazelTarget(BaseBazelTarget):
         self.copts: List[str] = []
 
     def targetName(self) -> str:
-        return self.depName()
+        return f":{self.depName()}"
 
     def addCopt(self, opt: str):
         self.copts.append(opt)
