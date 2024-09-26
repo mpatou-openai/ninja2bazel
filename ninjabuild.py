@@ -259,7 +259,8 @@ class NinjaParser:
                 if not v:
                     v = BuildTarget(s, self.getShortName(s))
                     if s in self.manually_generated:
-                        v = BuildTarget(s, self.getShortName(s))
+                        m = self.manually_generated[s]
+                        v = BuildTarget(m, self.getShortName(m))
                         v.markAsManual()
                     else:
                         v.markAsUnknown()
@@ -500,8 +501,8 @@ class NinjaParser:
                         includesFiles.append((f, d))
                     i.setIncludedFiles(includesFiles)
 
-    def setManuallyGeneratedTargets(self, manually_generated: Optional[List[str]]):
-        self.manually_generated = manually_generated or []
+    def setManuallyGeneratedTargets(self, manually_generated: Dict[str, str]):
+        self.manually_generated = manually_generated
 
     def parse(
         self,
@@ -629,7 +630,7 @@ def getBuildTargets(
     raw_ninja: List[str],
     dir: str,
     ninjaFileName: str,
-    manuallyGenerated: Optional[List[str]],
+    manuallyGenerated: Dict[str, str],
     codeRootDir: str,
     directoryPrefix: str,
     remap: Dict[str, str],

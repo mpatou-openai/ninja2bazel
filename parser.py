@@ -4,10 +4,24 @@ import logging
 import os
 import subprocess
 import sys
-from typing import List
+from typing import Dict, List
 
 from cc_import_parse import parseCCImports
 from ninjabuild import genBazelBuildFiles, getBuildTargets
+
+
+def parse_manually_generated(manually_generated: List[str]) -> Dict[str, str]:
+    ret = {}
+    for e in manually_generated:
+        if "=" not in e:
+            logging.fatal(
+                f"Manually generated dependency {e} is not in the form key=value"
+            )
+            sys.exit(-1)
+        v = e.split("=")
+        ret[v[0]] = v[1]
+
+    return ret
 
 
 def main():
@@ -45,7 +59,7 @@ def main():
 
     filename = args.filename
     rootdir = args.rootdir
-    manually_generated = args.manually_generated
+    manually_generated = parse_manually_generated(args.manually_generated)
 
     if not filename or not rootdir:
         logging.fatal(
