@@ -175,13 +175,17 @@ class BazelTarget(BaseBazelTarget):
         self.includeDirs: set[IncludeDir] = set()
         self.deps: set[Union[BaseBazelTarget, BazelCCImport]] = set()
         self.addPrefixIfRequired: bool = True
-        self.copts: List[str] = []
+        self.copts: set[str] = set()
+        self.defines: set[str] = set()
 
     def targetName(self) -> str:
         return f":{self.depName()}"
 
     def addCopt(self, opt: str):
-        self.copts.append(opt)
+        self.copts.add(opt)
+
+    def addDefine(self, define: str):
+        self.defines.add(define)
 
     def depName(self):
         if self.type == "cc_library" or self.type == "cc_shared_library":
@@ -276,8 +280,11 @@ class BazelTarget(BaseBazelTarget):
                 )
             else:
                 dirName = f'"{dir[0]}"'
-            copts.append(f'"-I{{}}".format({dirName})')
-        textOptions: Dict[str, List[str]] = {"copts": self.copts}
+            copts.add(f'"-I{{}}".format({dirName})')
+        textOptions: Dict[str, List[str]] = {
+            "copts": list(self.copts),
+            "defines": list(self.defines),
+        }
         for k, v2 in textOptions.items():
             if len(v2) > 0:
                 ret.append(f"    {k} = [")

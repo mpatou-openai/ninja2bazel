@@ -489,13 +489,19 @@ class Build:
     def handleManuallyGeneratedForBazelGen(
         cls, ctx: BazelBuildVisitorContext, el: "BuildTarget", build: "Build"
     ):
-        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-        t = BazelTarget("manually_generated_fixme", el.name, location)
+        # We expect the manually generated target to have a : in the name
+        assert ":" in el.name
+        (location, target) = el.name.split(":")
+        t = BazelTarget("manually_generated", target, location)
         logging.info(f"handleManuallyGeneratedForBazelGen for {el.name}")
-        ctx.dest = t
-        ctx.bazelbuild.bazelTargets.add(t)
-        if ctx.current is not None:
-            ctx.current.addDep(t)
+        # We don't add the manually generated target to the list of target to generate because we
+        # expect it to be well generated manually by the user
+        if ctx.dest is not None:
+            if el.name.endswith(".cc"):
+                ctx.dest.addSrc(t)
+            if el.name.endswith(".h"):
+                assert isinstance(ctx.dest, BazelTarget)
+                ctx.dest.addHdr(t)
 
     @classmethod
     def handlePhonyForBazelGen(
@@ -873,6 +879,38 @@ chmod a+x $@
             build = el.producedby
             assert build is not None
             workDir = self.vars.get("cmake_ninja_workdir", "")
+
+            for define in self.vars.get("DEFINES", "").split(" "):
+                ctx.current.addDefine(define)
+
+            for flag in self.vars.get("FLAGS", "").split(" "):
+                keep = True
+                if flag.startswith("-D"):
+                    ctx.current.addDefine(define)
+                    keep = False
+                if flag.startswith("-std="):
+                    # Let's not keep the c++ standard flag
+                    keep = False
+                if flag == "-g":
+                    # Let's not keep the debug flag
+                    keep = False
+                if flag.startswith("-O"):
+                    # Let's not keep the optimization flag
+                    keep = False
+                if flag.startswith("-march"):
+                    # Let's not keep the architecture flag
+                    keep = False
+                if flag.startswith("-mtune"):
+                    # Let's not keep the architecture tunning flag
+                    keep = False
+                if flag.startswith("-fPIC"):
+                    # Let's not keep the optimization flag
+                    keep = False
+                # Maybe some flags like -fdebug-info-for-profiling
+                if keep:
+                    ctx.current.addCopt(define)
+
+            # FLAGS = -fno-semantic-interposition -fno-omit-frame-pointer -fsized-deallocation -gline-tables-only -pthread -fno-omit-frame-pointer -momit-leaf-frame-pointer -fcoroutines -gdwarf-aranges -fdebug-info-for-profiling -fno-semantic-interposition
             for i in build.inputs:
                 for j in i.includes or []:
                     includeFile = j[0]
@@ -890,6 +928,7 @@ chmod a+x $@
                         build._genExportedFile(includeFile, ctx.current.location),
                         (includeDir, generated),
                     )
+
             assert len(self.outputs) == 1
             if ".grpc.pb.cc.o" in self.outputs[0].name:
                 self._handleGRPCCCProtobuf(ctx, el)

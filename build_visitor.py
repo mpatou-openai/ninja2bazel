@@ -27,6 +27,9 @@ class BuildVisitor:
         build: "Build",
     ):
         if build.rulename.name != "phony":
+            if el.type == TargetType.manually_generated:
+                build.handleManuallyGeneratedForBazelGen(ctx, el, build)
+                return
             if len(el.usedbybuilds) == 0:
                 logging.warning(
                     f"Skipping non phony top level target that is not used by anything: {el}"
@@ -44,8 +47,6 @@ class BuildVisitor:
         elif build.rulename.name == "phony":
             logging.info(f"Handling phony {build.outputs[0]}")
             build.handlePhonyForBazelGen(ctx, el, build)
-        elif el.type == TargetType.manually_generated:
-            build.handleManuallyGeneratedForBazelGen(ctx, el, build)
 
     @classmethod
     def getVisitor(cls) -> VisitorType:
