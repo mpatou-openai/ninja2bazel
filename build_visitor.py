@@ -27,9 +27,6 @@ class BuildVisitor:
         build: "Build",
     ):
         if build.rulename.name != "phony":
-            if el.type == TargetType.manually_generated:
-                build.handleManuallyGeneratedForBazelGen(ctx, el, build)
-                return
             if len(el.usedbybuilds) == 0:
                 logging.warning(
                     f"Skipping non phony top level target that is not used by anything: {el}"
@@ -73,6 +70,9 @@ class BuildVisitor:
                 BuildVisitor.visitProduced(ctx, el, build)
                 return True
             else:
+                if el.type == TargetType.manually_generated:
+                    Build.handleManuallyGeneratedForBazelGen(ctx, el)
+                    return True
                 Build.handleFileForBazelGen(el, ctx)
                 return True
             return True
