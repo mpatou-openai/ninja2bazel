@@ -300,7 +300,8 @@ class BazelTarget(BaseBazelTarget):
                     pathPrefix = _getPrefix(d)
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
-        copts = self.copts
+        copts = set()
+        copts.update(self.copts)
         for dir in list(self.includeDirs):
             # The second element IncludeDir is a flag to indicate if the header is generated
             # and if so we need to add the bazel-out prefix to the -I option
@@ -312,7 +313,7 @@ class BazelTarget(BaseBazelTarget):
                 dirName = f'"{dir[0]}"'
             copts.add(f'"-I{{}}".format({dirName})')
         textOptions: Dict[str, List[str]] = {
-            "copts": list(self.copts),
+            "copts": list(copts),
             "defines": list(self.defines),
         }
         for k, v2 in textOptions.items():
