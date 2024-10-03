@@ -239,6 +239,7 @@ class NinjaParser:
                 else:
                     ext = self.externals.get(s)
                     if s in self.manually_generated:
+                        logging.info(f"Marking {s} as a manually generated target")
                         m = self.manually_generated[s]
                         mv = BuildTarget(m, self.getShortName(m))
                         mv.markAsManual()
@@ -265,6 +266,7 @@ class NinjaParser:
                 if not v:
                     v = BuildTarget(s, self.getShortName(s))
                     if s in self.manually_generated:
+                        logging.info(f"Marking {s} as a manually generated target")
                         m = self.manually_generated[s]
                         v = BuildTarget(m, self.getShortName(m))
                         v.markAsManual()

@@ -487,7 +487,9 @@ class Build:
 
     @classmethod
     def handleManuallyGeneratedForBazelGen(
-        cls, ctx: BazelBuildVisitorContext, el: "BuildTarget", build: "Build"
+        cls,
+        ctx: BazelBuildVisitorContext,
+        el: "BuildTarget",
     ):
         # We expect the manually generated target to have a : in the name
         assert ":" in el.name
