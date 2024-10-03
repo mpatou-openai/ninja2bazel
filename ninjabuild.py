@@ -681,8 +681,10 @@ def printGraph(element: BuildTarget, ident: int = 0, file=sys.stdout):
     element.visitGraph(visitor, ctx)
 
 
-def genBazelBuildFiles(top_levels: list[BuildTarget], rootdir: str) -> Dict[str, str]:
-    bb = BazelBuild()
+def genBazelBuildFiles(
+    top_levels: list[BuildTarget], rootdir: str, prefix: str
+) -> Dict[str, str]:
+    bb = BazelBuild(prefix)
     for e in sorted(top_levels):
         e.markTopLevel()
         genBazel(e, bb, rootdir)
