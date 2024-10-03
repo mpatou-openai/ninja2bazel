@@ -881,13 +881,14 @@ chmod a+x $@
             workDir = self.vars.get("cmake_ninja_workdir", "")
 
             for define in self.vars.get("DEFINES", "").split(" "):
-                ctx.current.addDefine(define)
+                ctx.current.addDefine(f'"{define[2:]}"')
 
             for flag in self.vars.get("FLAGS", "").split(" "):
                 keep = True
                 if flag.startswith("-D"):
-                    ctx.current.addDefine(define)
+                    ctx.current.addDefine(f'"{flag[2:]}"')
                     keep = False
+                    continue
                 if flag.startswith("-std="):
                     # Let's not keep the c++ standard flag
                     keep = False
@@ -908,7 +909,8 @@ chmod a+x $@
                     keep = False
                 # Maybe some flags like -fdebug-info-for-profiling
                 if keep:
-                    ctx.current.addCopt(define)
+                    logging.info(f"Adding flag {flag} to copt into {ctx.current.name}")
+                    ctx.current.addCopt(f'"{flag}"')
 
             # FLAGS = -fno-semantic-interposition -fno-omit-frame-pointer -fsized-deallocation -gline-tables-only -pthread -fno-omit-frame-pointer -momit-leaf-frame-pointer -fcoroutines -gdwarf-aranges -fdebug-info-for-profiling -fno-semantic-interposition
             for i in build.inputs:
