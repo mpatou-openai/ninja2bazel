@@ -238,7 +238,13 @@ class NinjaParser:
                     inputs.append(BuildTarget(s, self.getShortName(s)).markAsFile())
                 else:
                     ext = self.externals.get(s)
-                    if ext is None:
+                    if s in self.manually_generated:
+                        m = self.manually_generated[s]
+                        mv = BuildTarget(m, self.getShortName(m))
+                        mv.markAsManual()
+                        inputs.append(mv)
+                        continue
+                    elif ext is None:
                         logging.debug(
                             f"Marking {s} as an external dependency {realPath}"
                         )
