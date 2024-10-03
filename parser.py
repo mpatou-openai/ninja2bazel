@@ -123,7 +123,7 @@ def main():
         compilerIncludes,
     )
     logging.info("Generating Bazel BUILD files from buildTargets")
-    output = genBazelBuildFiles(top_levels_targets, rootdir)
+    output = genBazelBuildFiles(top_levels_targets, rootdir, prefix)
     logging.info("Done")
     for name, content in output.items():
         logging.info(f"Wrote {rootdir}{name}{os.path.sep}BUILD.bazel")
