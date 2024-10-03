@@ -31,6 +31,9 @@ class BazelCCImport:
     def setLocation(self, location: str):
         self.location = location
 
+    def setPhysicalLocation(self, location: str):
+        self.physicalLocation = location
+
     def __eq__(self, other: object) -> bool:
         assert isinstance(other, BazelCCImport)
         return self.name == other.name
@@ -54,6 +57,9 @@ class BazelCCImport:
         # cc_import have headers but we don't include them in the upper target
         return []
 
+    def replaceFirst(self, txt: str) -> str:
+        return f"_{txt[1:]}"
+
     def asBazel(self) -> List[str]:
         ret = []
         ret.append("cc_import(")
@@ -61,38 +67,58 @@ class BazelCCImport:
         if self.system_provided:
             ret.append(f'    system_provided = "{self.system_provided}",')
             if self.sharedLibrary is not None:
-                ret.append(f'    interface_library = "{self.sharedLibrary}",')
+                ret.append(
+                    f'    interface_library = "{self.replaceFirst(self.sharedLibrary)}",'
+                )
         else:
             if self.sharedLibrary is not None:
-                ret.append(f'    shared_library = "{self.sharedLibrary}",')
-        ret.append(f'    hdrs = "{self.hdrs}",')
+                ret.append(
+                    f'    shared_library = "{self.replaceFirst(self.sharedLibrary)}",'
+                )
+        ret.append(f"    hdrs = {[self.replaceFirst(h) for h in self.hdrs]},")
         if self.staticLibrary is not None:
-            ret.append(f'    static_library = "{self.staticLibrary}",')
+            ret.append(
+                f'    static_library = "{self.replaceFirst(self.staticLibrary)}",'
+            )
+        ret.append('    visibility = ["//visibility:public"],')
         ret.append(")")
 
         return ret
 
 
 class BazelBuild:
-    def __init__(self: "BazelBuild"):
+    def __init__(self: "BazelBuild", prefix: str):
         self.bazelTargets: Set[Union["BaseBazelTarget", "BazelCCImport"]] = set()
+        self.prefix = prefix
 
     def genBazelBuildContent(self) -> Dict[str, str]:
         ret: Dict[str, str] = {}
         topContent: Dict[str, Set[str]] = {}
-        tmp = {'load(":helpers.bzl", "add_bazel_out_prefix")'}
+        if self.prefix.endswith("/"):
+            prefix = self.prefix[:-1]
+        else:
+            prefix = self.prefix
+        tmp = {f'load("//{prefix}:helpers.bzl", "add_bazel_out_prefix")'}
         content: Dict[str, List[str]] = {}
         lastLocation = None
         for t in sorted(self.bazelTargets):
             try:
-                body = content.get(t.location, [])
-                body.append(f"# Location {t.location}")
+                if t.location.startswith("@"):
+                    assert isinstance(t, BazelCCImport)
+                    location = t.physicalLocation
+                else:
+                    location = t.location
+                body = content.get(location, [])
+                body.append(f"# Location {location}")
                 body.extend(t.asBazel())
-                content[t.location] = body
-                top = topContent.get(t.location, tmp)
+                content[location] = body
+                if t.location.startswith("@"):
+                    top = topContent.get(location, set())
+                else:
+                    top = topContent.get(location, tmp.copy())
                 top.add(t.getGlobalImport())
-                topContent[t.location] = tmp
-                lastLocation = t.location
+                topContent[location] = top
+                lastLocation = location
             except Exception as e:
                 logging.error(f"While generating Bazel content for {t.name}: {e}")
                 raise
@@ -261,13 +287,17 @@ class BazelTarget(BaseBazelTarget):
             del hm["hdrs"]
             sources.extend(headers)
             headers = []
+
+        def _getPrefix(d: BaseBazelTarget | BazelCCImport):
+            if d.location.startswith("@"):
+                return d.location
+            return f"//{d.location}" if d.location != self.location else ""
+
         for k, v in hm.items():
             if len(v) > 0:
                 ret.append(f"    {k} = [")
                 for d in sorted(v):
-                    pathPrefix = (
-                        f"//{d.location}" if d.location != self.location else ""
-                    )
+                    pathPrefix = _getPrefix(d)
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
         copts = self.copts

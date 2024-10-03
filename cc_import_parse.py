@@ -43,7 +43,9 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
             if line.startswith("name = "):
                 name = cleanupVar(val)
                 current = BazelCCImport(name)
-                current.setLocation(f"{location}")
+                # Force this external repo
+                current.setLocation("@cpp_ext_libs//")
+                current.setPhysicalLocation(location)
             if line.startswith("interface_library = ") or line.startswith(
                 "shared_library = "
             ):
