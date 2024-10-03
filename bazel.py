@@ -266,7 +266,7 @@ class BazelTarget(BaseBazelTarget):
     def asBazel(self) -> List[str]:
         ret = []
         ret.append(f"{self.type}(")
-        ret.append(f'    name = "{self.targetName()}",')
+        ret.append(f'    name = "{self.targetName().replace(":", "")}",')
         deps_headers = list(self.getAllHeaders(deps_only=True))
         headers = []
         data = []
