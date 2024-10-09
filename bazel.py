@@ -340,13 +340,17 @@ class BazelGenRuleTarget(BaseBazelTarget):
         # We most probably don't want to do remote execution as we are running things from the
         # filesystem
         self.local: bool = True
+        self.aliases: Dict[str, str] = {}
 
     def addSrc(self, target: BaseBazelTarget):
         self.srcs.add(target)
 
-    def addOut(self, name: str):
-        target = BazelGenRuleTargetOutput(name, self.location, self)
-        self.outs.add(target)
+    def addOut(self, name: str, alias: Optional[str] = None):
+        if alias:
+            self.aliases[alias] = name
+        else:
+            target = BazelGenRuleTargetOutput(name, self.location, self)
+            self.outs.add(target)
 
     def addTool(self, target: BaseBazelTarget):
         self.tools.add(target)
@@ -381,8 +385,14 @@ class BazelGenRuleTarget(BaseBazelTarget):
     ) -> List["BazelGenRuleTargetOutput"]:
         if stripedPrefix:
             name = name.replace(stripedPrefix, "")
+        if self.aliases.get(name) is not None:
+            logging.info(f"Found alias {name} to {self.aliases[name]}")
+            name = self.aliases[name]
         if name not in self.outs:
-            raise ValueError(f"Output {name} didn't exists on genrule {self.name}")
+            logging.info("Pouet")
+            raise ValueError(
+                f"Output {name} didn't exists on genrule {self.name} {self.aliases}"
+            )
         regex = r".*?/?([^/]*)\.[h|cc|cpp|hpp|c]"
         match = re.match(regex, name)
         if match:

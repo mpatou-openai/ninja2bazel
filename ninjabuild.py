@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ from build import (Build, BuildTarget, Rule, TargetType,
                    TopLevelGroupingStrategy)
 from build_visitor import (BazelBuildVisitorContext, BuildVisitor,
                            PrintVisitorContext)
-from cppfileparser import CPPIncludes, findCPPIncludes
+from cppfileparser import CPPIncludes, findCPPIncludes, parseIncludes
 from helpers import resolvePath
 from protoparser import findProtoIncludes
 from visitor import VisitorContext
@@ -32,6 +33,25 @@ IGNORED_TARGETS = [
     "install/local",
     "install/strip",
 ]
+
+
+def _copyFilesBackNForth(sourceDir, destDir):
+    # Ensure the destination directory exists, create it if it doesn't
+    if not os.path.exists(destDir):
+        os.makedirs(destDir, exist_ok=True)
+
+    # Iterate over all the files and directories in the cache directory
+    for item in os.listdir(sourceDir):
+        source_path = os.path.join(sourceDir, item)
+        destination_path = os.path.join(destDir, item)
+
+        # Check if it is a file or directory and copy accordingly
+        if os.path.isdir(source_path):
+            # Copy the directory and its contents
+            shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
+        else:
+            # Copy the file
+            shutil.copy2(source_path, destination_path)
 
 
 def isCPPLikeFile(name: str) -> bool:
@@ -336,6 +356,10 @@ class NinjaParser:
         self.parse(raw_ninja, cur_dir)
 
     def executeGenerator(self, build: Build, target: BuildTarget):
+        subDir = self.codeRootDir.replace("/", "_")
+        cacheDirBase = f"{os.environ['HOME']}/.cache/ninja2bazel/{subDir}"
+        os.makedirs(cacheDirBase, exist_ok=True)
+
         cmd = build.getCoreCommand()
         if cmd is None:
             if " cp " in build.vars.get(
@@ -369,13 +393,25 @@ class NinjaParser:
             self.ran.add((cmd, s))
         cwd = os.getcwd()
         os.chdir(tempDir)
-        logging.info(f"Running {cmd}")
-        res = subprocess.run(cmd, shell=True)
-        os.chdir(cwd)
-        if res.returncode != 0:
-            logging.warn(f"Got an exception when trying to run {cmd} in {tempDir}")
-            return
 
+        sha1cmd = hashlib.sha1()
+        sha1cmd.update(cmd.encode())
+        sha1 = sha1cmd.hexdigest()
+
+        cacheDir = f"{cacheDirBase}/{sha1}"
+        if os.path.exists(cacheDir):
+            logging.info(f"Using cache for {cmd} SHA1:{sha1}")
+            _copyFilesBackNForth(cacheDir, tempDir)
+        else:
+            logging.info(f"Running {cmd} SHA1:{sha1}")
+            res = subprocess.run(cmd, shell=True)
+            if res.returncode != 0:
+                logging.warn(f"Got an exception when trying to run {cmd} in {tempDir}")
+                return
+
+            _copyFilesBackNForth(tempDir, cacheDir)
+
+        os.chdir(cwd)
         return tempDir
 
     def getCCImportForExternalDep(self, target: BuildTarget) -> Optional[BazelCCImport]:
@@ -398,6 +434,7 @@ class NinjaParser:
         f: str,
         fileFolder: str,
         tempTopFolder: str,
+        debug: bool = False,
     ):
         build = target.producedby
         if not build:
@@ -411,15 +448,28 @@ class NinjaParser:
                 logging.debug(f"Already processed {f}")
                 return
 
-            includes = None
+            includes_dirs: Set[str] = set()
             for b in target.usedbybuilds:
                 includes = b.vars.get("INCLUDES", "")
                 if includes != "":
-                    includes = includes.replace(
-                        workDir,
-                        tempTopFolder,
-                    )
-                    # logging.info(f"Found includes {includes}")
+                    includes_dirs = parseIncludes(includes)
+                    updated_include_dirs = []
+                    for dir in includes_dirs:
+                        if dir.startswith(workDir):
+                            updated_include_dirs.append(
+                                dir.replace(workDir, tempTopFolder)
+                            )
+                            # We want to clobber the "/" at the end so that
+                            # the constructed path looks nothing like a real
+                            # path and more something like /generatedinclude
+                            updated_include_dirs.append(
+                                dir.replace(workDir + "/", "/generated")
+                            )
+                        else:
+                            updated_include_dirs.append(dir)
+
+                    includes_dirs = set(updated_include_dirs)
+
                     break
             if includes is None:
                 logging.warn(
@@ -428,19 +478,20 @@ class NinjaParser:
                 includes = ""
             cppIncludes = findCPPIncludes(
                 os.path.sep.join([fileFolder, f]),
-                includes,
+                includes_dirs,
                 self.compilerIncludes,
                 self.cc_imports,
-            )
-            logging.info(
-                f"Found {cppIncludes.foundHeaders} headers for generated file {f}"
+                self.generatedFiles,
             )
             if len(cppIncludes.notFoundHeaders) > 0 and includes != "":
                 logging.warning(
                     f"Couldn't find {cppIncludes.notFoundHeaders} headers for generated file {f}"
                 )
+            if debug:
+                logging.info(f"For file {f} found {cppIncludes.foundHeaders}")
             for i in build.outputs:
                 if not (i.name.endswith(f) and len(cppIncludes.foundHeaders) > 0):
+                    # Why ?
                     continue
                 logging.debug(
                     f"Setting headers for {i.name} {len(cppIncludes.foundHeaders)}"
@@ -452,53 +503,76 @@ class NinjaParser:
                     )
                     includeDir = h[1].replace(tempTopFolder, workDir)
                     allIncludes.append((name, includeDir))
+                # We make the decision to not deal with generated files that are needed by other
+                # generated files
+                for h in list(cppIncludes.neededGeneratedFiles):
+                    logging.info(
+                        f"Not adding {h[0]} to the list of includes because we are dealing with a generated file"
+                    )
+
                 i.setIncludedFiles(allIncludes)
                 i.setDeps(list(cppIncludes.neededImports))
             self.cacheHeaders[f] = cppIncludes
 
-    def finalizeHeaders(self, current_dir: str):
+    def _finalizeHeadersForNonGeneratedFiles(self, current_dir: str):
         for t in self.all_outputs.values():
             build = t.producedby
             if not build:
                 continue
             workDir = build.vars.get("cmake_ninja_workdir", "")
-            if build.rulename.name == "CUSTOM_COMMAND":
-                ret = self.executeGenerator(build, t)
-                # TODO do it only once per build not for all the files generated by this build ...
-                if ret is None:
-                    continue
-                for dirpath, dirname, files in os.walk(ret):
-                    for f in files:
-                        self.finiliazeHeadersForFile(t, f, dirpath, ret)
-                try:
-                    shutil.rmtree(ret)
-                except Exception as _:
-                    logging.warn(f"Couldn't remove {ret}")
-                    pass
+            generatedOutputsNeeded = set()
 
             for i in build.inputs:
                 if i.is_a_file and isCPPLikeFile(i.name):
-                    includes = build.vars.get("INCLUDES", "")
+                    includes_dirs = parseIncludes(build.vars.get("INCLUDES", ""))
+                    updated_include_dirs = []
+                    for dir in includes_dirs:
+                        if dir.startswith(workDir):
+                            updated_include_dirs.append(
+                                dir.replace(workDir, "/generated")
+                            )
+                        else:
+                            updated_include_dirs.append(dir)
+
+                    includes_dirs = set(updated_include_dirs)
                     cppIncludes = findCPPIncludes(
-                        i.name, includes, self.compilerIncludes, self.cc_imports
+                        i.name,
+                        includes_dirs,
+                        self.compilerIncludes,
+                        self.cc_imports,
+                        self.generatedFiles,
                     )
                     if len(cppIncludes.notFoundHeaders) > 0:
-                        pass
-                        # logging.warning( f"Couldn't find {cppIncludes.notFoundHeaders} headers for {i.name}")
-                    i.setIncludedFiles(
-                        [
-                            (self.getShortName(h[0], workDir), h[1])
-                            for h in list(cppIncludes.foundHeaders)
-                        ]
-                    )
+                        for h in cppIncludes.notFoundHeaders:
+                            if h in self.generatedFiles:
+                                logging.info(
+                                    f"Found missing header {h} in the generated files"
+                                )
+                            else:
+                                if h not in self.missingFiles:
+                                    self.missingFiles[h] = []
+                                self.missingFiles[h].append(build)
+                    allIncludes = [
+                        (self.getShortName(h[0], workDir), h[1])
+                        for h in list(cppIncludes.foundHeaders)
+                    ]
+                    # Figure a way to add the builds for the generated files to the list of inputs
+                    # for teh current build
+                    for h2 in list(cppIncludes.neededGeneratedFiles):
+                        logging.info(h2)
+                        allIncludes.append((h2[0], h2[1]))
+                        for bld in self.generatedFiles[h2[0]].outputs:
+                            if bld.name == h2[0]:
+                                generatedOutputsNeeded.add(bld)
+                    i.setIncludedFiles(allIncludes)
                     i.setDeps(list(cppIncludes.neededImports))
                 if i.is_a_file and isProtoLikeFile(i.name):
-                    includes_dirs: List[str] = []
+                    includes_dirs = set()
                     for part in build.vars.get("COMMAND", "").split("&&"):
                         if "/protoc" in part:
                             regex = r"-I ([^ ]+)"
                             matches = re.findall(regex, part)
-                            includes_dirs.extend(matches)
+                            includes_dirs.update(matches)
 
                     protos = findProtoIncludes(i.name, includes_dirs)
                     includesFiles = []
@@ -508,6 +582,38 @@ class NinjaParser:
                         f = f.replace(d + os.path.sep, "")
                         includesFiles.append((f, d))
                     i.setIncludedFiles(includesFiles)
+
+            build.inputs.extend(list(generatedOutputsNeeded))
+
+    def _finalizeHeadersForGeneratedFiles(self, current_dir: str):
+        for t in self.all_outputs.values():
+            build = t.producedby
+            if not build:
+                continue
+            if build.rulename.name == "CUSTOM_COMMAND":
+                ret = self.executeGenerator(build, t)
+                if ret is None:
+                    continue
+                for dirpath, dirname, files in os.walk(ret):
+                    for f in files:
+                        relative_file = f"{dirpath}/{f}".replace(f"{ret}/", "")
+                        # store the filename to build association
+                        self.generatedFiles[relative_file] = build
+                        self.finiliazeHeadersForFile(t, f, dirpath, ret, True)
+                try:
+                    shutil.rmtree(ret)
+                except Exception as _:
+                    logging.warn(f"Couldn't remove {ret}")
+                    pass
+
+    def finalizeHeaders(self, current_dir: str):
+        self.generatedFiles: Dict[str, Any] = {}
+        self.missingFiles: Dict[str, List[Build]] = {}
+        # We might want to iterate twice on the values,
+        # the first time we might want to get the builds that are custom commands because they are
+        # supposed to generate files that are used by other builds
+        self._finalizeHeadersForGeneratedFiles(current_dir)
+        self._finalizeHeadersForNonGeneratedFiles(current_dir)
 
     def setManuallyGeneratedTargets(self, manually_generated: Dict[str, str]):
         self.manually_generated = manually_generated
@@ -655,6 +761,7 @@ def getBuildTargets(
     parser.setCompilerIncludes(compilerIncludes)
     parser.setCCImports(cc_imports)
     parser.parse(raw_ninja, dir)
+    logging.info("Parsing done")
     parser.endContext(ninjaFileName)
 
     if len(parser.missing) != 0:

@@ -2,9 +2,9 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, Generator, List, Optional, Set, Tuple
+from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
-from bazel import BaseBazelTarget, BazelCCImport
+from bazel import BazelCCImport
 from helpers import resolvePath
 
 
@@ -28,14 +28,14 @@ class CPPIncludes:
     foundHeaders: Set[Tuple[str, str]]
     notFoundHeaders: Set[str]
     neededImports: Set[BazelCCImport]
-    neededGeneratedTargets: Set[BaseBazelTarget]
+    neededGeneratedFiles: Set[Tuple[str, str]]
 
     def __add__(self, other: "CPPIncludes") -> "CPPIncludes":
         return CPPIncludes(
             self.foundHeaders.union(other.foundHeaders),
             self.notFoundHeaders.union(other.notFoundHeaders),
             self.neededImports.union(other.neededImports),
-            self.neededGeneratedTargets.union(other.neededGeneratedTargets),
+            self.neededGeneratedFiles.union(other.neededGeneratedFiles),
         )
 
 
@@ -45,25 +45,36 @@ cache: Dict[str, CPPIncludes] = {}
 def _findCPPIncludeForFile(
     file: str,
     includes_dirs: Set[str],
-    includes: str,
     current_dir: str,
     name: str,
     cc_imports: List[BazelCCImport],
     compilerIncludes: List[str],
+    generatedFiles: Dict[str, Any],
 ) -> Tuple[bool, CPPIncludes]:
     found = False
     ret = CPPIncludes(set(), set(), set(), set())
 
     for d in includes_dirs:
-        if d.startswith("/"):
+        generated_dir = False
+        if d.startswith("/generated"):
+            full_file_name = f"{d.replace('/generated', '')}/{file}"
+            generated_dir = True
+        elif d.startswith("/"):
             full_file_name = f"{d}/{file}"
         else:
             full_file_name = f"{current_dir}/{d}/{file}"
+
+        if generated_dir and full_file_name in generatedFiles:
+            # The search header is a generated one that whose path match the includes
+            # There might be something to do remove prefixes
+            ret.neededGeneratedFiles.add((full_file_name, d))
+            continue
 
         if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
             continue
 
         logging.debug(f"Found {file} in the includes variable")
+        # Check if the file is part of the cc_imports as we don't want to recurse for headers there
         for imp in cc_imports:
             if full_file_name in imp.hdrs:
                 logging.info(f"Found {full_file_name} in {imp}")
@@ -71,9 +82,9 @@ def _findCPPIncludeForFile(
                 found = True
                 break
 
+        # Check if the file is part of the compiler include as we don't want to recurse for headers
+        # there too
         for cdir in compilerIncludes:
-            if file.endswith("DataTypes.h"):
-                logging.info(f"Looking for {file} in the compiler include: {cdir}")
             full_file_name2 = f"{cdir}/{file}"
             if not os.path.exists(full_file_name2) or os.path.isdir(full_file_name2):
                 continue
@@ -88,7 +99,12 @@ def _findCPPIncludeForFile(
         ret.foundHeaders.add((full_file_name, d))
 
         cppIncludes = findCPPIncludes(
-            full_file_name, includes, compilerIncludes, cc_imports, name
+            full_file_name,
+            includes_dirs,
+            compilerIncludes,
+            cc_imports,
+            generatedFiles,
+            name,
         )
         ret += cppIncludes
         found = True
@@ -98,12 +114,13 @@ def _findCPPIncludeForFile(
 
 def findCPPIncludes(
     name: str,
-    includes: str,
+    includes_dirs: Set[str],
     compilerIncludes: List[str],
     cc_imports: List[BazelCCImport],
+    generatedFiles: Dict[str, Any],
     parent: Optional[str] = None,
 ) -> CPPIncludes:
-    key = f"{name} {includes}"
+    key = f"{name} {includes_dirs}"
     ret = CPPIncludes(set(), set(), set(), set())
     # There is sometimes loop, as we don't really implement the #pragma once
     # deal with it
@@ -112,10 +129,6 @@ def findCPPIncludes(
     if key in seen:
         return ret
     seen.add(key)
-    if includes is not None:
-        includes_dirs = parseIncludes(includes)
-    else:
-        includes_dirs = []
     current_dir = os.path.dirname(os.path.abspath(name))
     logging.debug(f"Handling findCPPIncludes {name}")
     with open(name, "r") as f:
@@ -140,7 +153,12 @@ def findCPPIncludes(
                 ret.foundHeaders.add((full_file_name, current_dir))
                 logging.debug(f"Checking {full_file_name} for {name}")
                 cppIncludes = findCPPIncludes(
-                    full_file_name, includes, compilerIncludes, cc_imports, name
+                    full_file_name,
+                    includes_dirs,
+                    compilerIncludes,
+                    cc_imports,
+                    generatedFiles,
+                    name,
                 )
                 ret += cppIncludes
             else:
@@ -151,11 +169,11 @@ def findCPPIncludes(
                 found, cppIncludes = _findCPPIncludeForFile(
                     file,
                     includes_dirs,
-                    includes,
                     current_dir,
                     name,
                     cc_imports,
                     compilerIncludes,
+                    generatedFiles,
                 )
                 ret += cppIncludes
         else:
@@ -166,11 +184,11 @@ def findCPPIncludes(
             found, cppIncludes = _findCPPIncludeForFile(
                 file,
                 includes_dirs,
-                includes,
                 current_dir,
                 name,
                 cc_imports,
                 compilerIncludes,
+                generatedFiles,
             )
             ret += cppIncludes
 
@@ -184,9 +202,13 @@ def findCPPIncludes(
                 found = True
                 break
 
+            if file in generatedFiles:
+                logging.info(f"Found missing header {file} in the generated files")
+                found = True
+
         if not found:
             logging.info(
-                f"Not found {file} in the compiler includes for {name} wih includes {includes}"
+                f"Not found {file} in the compiler includes for {name} wih includes {includes_dirs}"
             )
             ret.notFoundHeaders.add(file)
     if len(ret.notFoundHeaders) > 0:
