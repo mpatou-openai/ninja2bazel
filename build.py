@@ -467,6 +467,9 @@ class Build:
                 elif d.startswith("/") and workDir is not None:
                     includeDir = d.replace(workDir, "")
                     generated = True
+                elif d.startswith("/generated"):
+                    generated = True
+                    includeDir = d.replace("/generated", "")
                 else:
                     # Maybe we should look for system headers
                     # FIXME deal with cc_imports here too
@@ -621,21 +624,30 @@ class Build:
                     genTarget.addSrc(self._genExportedFile(e, genTarget.location))
             outDirs = set()
             outFiles = set()
+            workDir = self.vars.get("cmake_ninja_workdir", "")
+            shortNames = [elm.shortName for elm in self.outputs]
             for elm in self.outputs:
+                altName = elm.name.replace(workDir, "")
+
                 name = elm.shortName
+
                 if name.startswith(location + "/"):
                     name = name.replace(location + "/", "")
-                outDirs.add(os.path.dirname(name))
-                outFiles.add(name)
-                genTarget.addOut(
-                    name,
-                )
+
+                if altName != name and location + "/" + altName in shortNames:
+                    logging.info(f"Creating alias {name} for {altName}")
+                    genTarget.addOut(altName, name)
+                else:
+                    outDirs.add(os.path.dirname(name))
+                    outFiles.add(name)
+                    genTarget.addOut(name)
+
             logging.info(
                 f"Current build path for target: {TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)}"
             )
             # We don't need to handle the replacement of prefix and whatnot bazel seems to be able
             # to handle it
-            cmd = cmd.replace(self.vars.get("cmake_ninja_workdir", ""), "")
+            cmd = cmd.replace(workDir, "")
             countRewrote = 0
             countInput = 0
             countOptions = 0
