@@ -123,7 +123,7 @@ class BuildTarget:
         self.usedbybuilds: List["Build"] = []
         self.is_a_file = False
         self.type = TargetType.other
-        self.includes: Optional[List[Tuple[str, str]]] = None
+        self.includes: List[Tuple[str, str]] = []
         self.depends: List[Union[BazelCCImport, "BuildTarget"]] = []
         self.aliases: List[str] = []
         # Is this target the first level (ie. one of the final output of the build) ?
