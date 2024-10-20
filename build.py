@@ -414,6 +414,8 @@ class Build:
             )
             return
         if el.name.endswith(".h") or el.name.endswith(".hpp"):
+            # Seems not needed anymore this ?
+            assert False
             # TODO I have the feeling that we could extrapolate the location of the header here
             # FIXME Not clear if this is ever visted
             logging.info(f"Handling generated file header {el.name}")
@@ -745,22 +747,29 @@ chmod a+x $@
 
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName) + "/"
         outs = genTarget.getOutputs(el.shortName, location)
-        for t in outs:
-            if ctx.dest is not None:
-                if t.name.endswith(".h"):
-                    # Figure out if we need some strip_include_prefix by matching the file
-                    # with the diffrent -I flags from the command line
-                    assert isinstance(ctx.dest, BazelTarget)
-                    ctx.dest.addHdr(t)
-                if (
-                    t.name.endswith(".c")
-                    or t.name.endswith(".cc")
-                    or t.name.endswith(".cpp")
-                ):
-                    ctx.dest.addSrc(t)
-            elif ctx.current is not None:
-                logging.warn(f"No dest for custom command: {el}")
-                [ctx.current.addDep(o) for o in outs]
+
+        if 0:
+            # Not sure why we do this, this feels wrong ... FIXME
+            for t in outs:
+                if ctx.dest is not None:
+                    if t.name.endswith(".h"):
+                        # Figure out if we need some strip_include_prefix by matching the file
+                        # with the diffrent -I flags from the command line
+                        assert isinstance(ctx.dest, BazelTarget)
+                        # Add the header, indicate that it's a generated header
+                        logging.info(
+                            f"Adding generated header {t}, {el.includes[0][1]}"
+                        )
+                        ctx.dest.addHdr(t, (el.includes[0][1], True))
+                    if (
+                        t.name.endswith(".c")
+                        or t.name.endswith(".cc")
+                        or t.name.endswith(".cpp")
+                    ):
+                        ctx.dest.addSrc(t)
+                elif ctx.current is not None:
+                    logging.warn(f"No dest for custom command: {el}")
+                    [ctx.current.addDep(o) for o in outs]
         ctx.next_dest = genTarget
         ctx.current = genTarget
 

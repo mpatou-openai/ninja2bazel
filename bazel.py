@@ -394,12 +394,11 @@ class BazelGenRuleTarget(BaseBazelTarget):
             )
         regex = r".*?/?([^/]*)\.[h|cc|cpp|hpp|c]"
         match = re.match(regex, name)
-        if match:
+        if 0 and match:
             regex2 = rf".*?{match.group(1)}\.[h|cc|cpp|hpp|c]"
-            namePrefix = match.group(1)
             outs = [v for v in self.outs if re.match(regex2, v.name)]
         else:
-            outs = [v for v in self.outs if v.name == namePrefix]
+            outs = [v for v in self.outs if v.name == name]
 
         return outs
 
