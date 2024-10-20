@@ -67,8 +67,12 @@ def _findCPPIncludeForFile(
         if generated_dir and full_file_name in generatedFiles:
             # The search header is a generated one that whose path match the includes
             # There might be something to do remove prefixes
+            if full_file_name.endswith(".pb.h"):
+                # Skip protobuf files
+                continue
             ret.neededGeneratedFiles.add((full_file_name, d))
-            continue
+            found = True
+            break
 
         if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
             continue
