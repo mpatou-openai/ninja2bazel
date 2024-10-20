@@ -559,10 +559,14 @@ class NinjaParser:
                     # Figure a way to add the builds for the generated files to the list of inputs
                     # for teh current build
                     for h2 in list(cppIncludes.neededGeneratedFiles):
-                        logging.info(h2)
-                        allIncludes.append((h2[0], h2[1]))
+                        logging.info(f"Needed generated include file {h2}")
                         for bld in self.generatedFiles[h2[0]].outputs:
+                            includeDir = h2[1].replace("/generated", "")
                             if bld.name == h2[0]:
+                                # It's a bit weird that we "self" include ourselve
+                                # but that's the only simple way to keep track of the needed
+                                # includeDir
+                                bld.includes.append((h2[0], includeDir))
                                 generatedOutputsNeeded.add(bld)
                     i.setIncludedFiles(allIncludes)
                     i.setDeps(list(cppIncludes.neededImports))
