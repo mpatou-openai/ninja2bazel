@@ -585,9 +585,10 @@ class Build:
             ctx.next_dest = tmp
 
     def canGenerateFinal(self) -> bool:
-        cmd = self.getCoreCommand()
-        if cmd is None:
+        ret = self.getCoreCommand()
+        if ret is None:
             return False
+        cmd, _ = ret
         if self.isCPPCommand(cmd) and self.vars.get("LINK_FLAGS") is not None:
             return True
         if self.isCPPCommand(cmd) and "-c" not in cmd:
@@ -988,7 +989,7 @@ chmod a+x $@
     def getRawcommand(self) -> str:
         return self.rulename.vars.get("COMMAND", "")
 
-    def getCoreCommand(self) -> Optional[str]:
+    def getCoreCommand(self) -> Optional[Tuple[str, str | None]]:
         command = self.rulename.vars.get("command")
         if command is None:
             return None
@@ -997,14 +998,14 @@ chmod a+x $@
             command = c2
         arr = command.split("&&")
         found = False
-
+        runDir = None
         for cmd in arr:
             if self.rulename.name == "CUSTOM_COMMAND":
+                if cmd.startswith("cd "):
+                    runDir = cmd[3:].replace(
+                        self.vars.get("cmake_ninja_workdir", ""), ""
+                    )
                 for fin in self.inputs:
-                    if fin.name.endswith("atlas_tuples.yml"):
-                        logging.info(
-                            f"Found atlas_tuples.yml in {cmd} {fin.name in cmd} {fin.is_a_file} pouet"
-                        )
                     if fin.is_a_file:
                         if fin.name in cmd:
                             found = True
@@ -1014,7 +1015,9 @@ chmod a+x $@
                 break
 
         if found:
-            return cmd
+            if runDir is not None:
+                runDir = runDir.strip()
+            return (cmd, runDir)
         return None
 
     def _resolveName(self, name: str, exceptVars: Optional[List[str]] = None) -> str:

@@ -356,54 +356,68 @@ class NinjaParser:
         self.parse(raw_ninja, cur_dir)
 
     def executeGenerator(self, build: Build, target: BuildTarget):
+        tempDir = tempfile.mkdtemp()
         subDir = self.codeRootDir.replace("/", "_")
         cacheDirBase = f"{os.environ['HOME']}/.cache/ninja2bazel/{subDir}"
         os.makedirs(cacheDirBase, exist_ok=True)
 
-        cmd = build.getCoreCommand()
-        if cmd is None:
+        coreRet = build.getCoreCommand()
+        outputs = set()
+        workDir = build.vars.get("cmake_ninja_workdir", "")
+        for o in build.outputs:
+            outputs.add(o.name.replace(workDir, ""))
+
+        if coreRet is None:
             if " cp " in build.vars.get(
                 "COMMAND", ""
             ) or "/bin/cmake" in build.vars.get("COMMAND", ""):
-                logging.warning(
+                logging.debug(
                     f"Command for {target.name}: {build.vars.get('COMMAND')} is not a \"core\" one"
                 )
             return
+        cmd, runDir = coreRet
         cmd = cmd.strip()
         if cmd.startswith("cp "):
             return
-        s = build.vars.get("cmake_ninja_workdir", "")
-        cmd = re.sub(rf"{s}", "", cmd)
 
-        tempDir = tempfile.mkdtemp()
         cmd = cmd.strip()
         os.environ["PYTHONPATH"] = (
             os.environ.get("PYTHONPATH", "") + ":" + self.codeRootDir
         )
         exe = cmd.split(" ")
         if exe[0].endswith("/protoc"):
+            for f in outputs:
+                self.generatedFiles[f] = build
+                pass
+            # Should generate empty files
             # skip protoc
             return
         if exe[0].endswith(".py"):
             cmd = f"python3 {cmd}"
 
-        if (cmd, s) in self.ran:
+        if (cmd, workDir) in self.ran:
             return
         else:
-            self.ran.add((cmd, s))
+            self.ran.add((cmd, workDir))
         cwd = os.getcwd()
         os.chdir(tempDir)
+
+        if runDir is not None:
+            cmd = f"mkdir -p {runDir} && cd {runDir} && {cmd}"
 
         sha1cmd = hashlib.sha1()
         sha1cmd.update(cmd.encode())
         sha1 = sha1cmd.hexdigest()
+
+        # We want to hash first before replacing workdir by tempdir
+        cmd = re.sub(rf"{workDir}", f"{tempDir}/", cmd)
 
         cacheDir = f"{cacheDirBase}/{sha1}"
         if os.path.exists(cacheDir):
             logging.info(f"Using cache for {cmd} SHA1:{sha1}")
             _copyFilesBackNForth(cacheDir, tempDir)
         else:
-            logging.info(f"Running {cmd} SHA1:{sha1}")
+            logging.info(f"Running in {tempDir} {cmd} SHA1:{sha1}")
             res = subprocess.run(cmd, shell=True)
             if res.returncode != 0:
                 logging.warn(f"Got an exception when trying to run {cmd} in {tempDir}")
