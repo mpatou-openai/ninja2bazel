@@ -32,14 +32,18 @@ class BuildVisitor:
                     f"Skipping non phony top level target that is not used by anything: {el}"
                 )
                 return
-            cmd = build.getCoreCommand()
-            if cmd is None and build.rulename.name != "CUSTOM_COMMAND":
+            rawCmd = build.getCoreCommand()
+
+            if rawCmd is None and build.rulename.name != "CUSTOM_COMMAND":
                 logging.warning(f"{el} has no valid command {build.inputs}")
                 logging.warning(
                     f"Didn't find a valid command in {build.getRawcommand()}"
                 )
                 return
-            assert cmd is not None
+            assert rawCmd is not None
+            # We don't care about the directory where the command should run when generating
+            # bazel command, in theory it should already be baked in the command itself
+            (cmd, _) = rawCmd
             build.handleRuleProducedForBazelGen(ctx, el, cmd)
         elif build.rulename.name == "phony":
             logging.info(f"Handling phony {build.outputs[0]}")
