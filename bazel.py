@@ -389,7 +389,6 @@ class BazelGenRuleTarget(BaseBazelTarget):
             logging.info(f"Found alias {name} to {self.aliases[name]}")
             name = self.aliases[name]
         if name not in self.outs:
-            logging.info("Pouet")
             raise ValueError(
                 f"Output {name} didn't exists on genrule {self.name} {self.aliases}"
             )

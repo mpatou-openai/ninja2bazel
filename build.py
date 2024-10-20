@@ -459,7 +459,6 @@ class Build:
             if el.producedby is not None:
                 workDir = el.producedby.vars.get("cmake_ninja_workdir", "")
             for i, d in el.includes:
-                logging.info(f"include {i} dir {d}")
                 incDirs.add(d)
                 generated = False
                 if d.startswith(ctx.rootdir):
@@ -937,7 +936,7 @@ chmod a+x $@
                         generated = True
                     else:
                         includeDir = includeDirFull.replace(ctx.rootdir, "")
-                    logging.info(
+                    logging.debug(
                         f"Adding include {includeFile} from {includeDir} generated {generated} full dir {j[1]}"
                     )
                     ctx.current.addHdr(

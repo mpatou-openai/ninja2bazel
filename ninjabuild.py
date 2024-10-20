@@ -488,7 +488,7 @@ class NinjaParser:
                     f"Couldn't find {cppIncludes.notFoundHeaders} headers for generated file {f}"
                 )
             if debug:
-                logging.info(f"For file {f} found {cppIncludes.foundHeaders}")
+                logging.info(f"For file {f} found headers {cppIncludes.foundHeaders}")
             for i in build.outputs:
                 if not (i.name.endswith(f) and len(cppIncludes.foundHeaders) > 0):
                     # Why ?
@@ -599,7 +599,7 @@ class NinjaParser:
                         relative_file = f"{dirpath}/{f}".replace(f"{ret}/", "")
                         # store the filename to build association
                         self.generatedFiles[relative_file] = build
-                        self.finiliazeHeadersForFile(t, f, dirpath, ret, True)
+                        self.finiliazeHeadersForFile(t, f, dirpath, ret, False)
                 try:
                     shutil.rmtree(ret)
                 except Exception as _:
