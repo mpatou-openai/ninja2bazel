@@ -48,8 +48,10 @@ class BuildFileGroupingStrategy:
     _instance = None
 
     def __new__(cls, *args, **kwargs):
+        # We want to get the class variable on the baseclass because otherwise they will be
+        # different on all the classes and we end up creating too many instances
         base = cls.__bases__[0]
-        if base == object:
+        if base is object:
             base = cls
 
         if base._instance is None:
@@ -128,7 +130,7 @@ class BuildTarget:
         self.aliases: List[str] = []
         # Is this target the first level (ie. one of the final output of the build) ?
         self.topLevel = False
-        self.opaque = Optional[object]
+        self.opaque: Optional[object] = None
 
     def markTopLevel(self):
         self.topLevel = True
@@ -764,10 +766,11 @@ chmod a+x $@
         # headers, we rely on this part to properly add to the bazelTarget the needed files (mostly
         # headers)
         for t in outs:
-            logging.info(
-                f"Looking for generated file {t} in {ctx.dest.neededGeneratedFiles}"
-            )
             if ctx.dest is not None:
+                logging.info(
+                    f"Looking for generated file {t} in {ctx.dest.neededGeneratedFiles}"
+                )
+                # ignoretype
                 if t.name.endswith(".h") and t in ctx.dest.neededGeneratedFiles:
                     logging.info(f"Found {t} in {ctx.dest.neededGeneratedFiles}")
                     # Figure out if we need some strip_include_prefix by matching the file

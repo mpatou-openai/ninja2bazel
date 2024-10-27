@@ -142,6 +142,7 @@ class BaseBazelTarget(object):
         self.type = type
         self.name = name
         self.location = location
+        self.neededGeneratedFiles: set[str] = set()
 
     def getGlobalImport(self) -> str:
         return ""
@@ -203,7 +204,6 @@ class BazelTarget(BaseBazelTarget):
         self.addPrefixIfRequired: bool = True
         self.copts: set[str] = set()
         self.defines: set[str] = set()
-        self.neededGeneratedFiles = set()
 
     def targetName(self) -> str:
         return f":{self.depName()}"

@@ -3,130 +3,14 @@ import sys
 import unittest
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from bazel import BazelBuild, BazelTarget  # noqa: E402
+from bazel import BazelTarget, ExportedFile, IncludeDir
 
 
-class TestBazelTests(unittest.TestCase):
-    def testBazelBuild(self):
-        b = BazelTarget("cc_library", "foo")
-        b.addSrc("foo/bar/baz.c")
-        b.addHdr("foo/bar/baz.h")
-
-        b2 = BazelTarget("cc_binary", "foo")
-        b2.addSrc("foo/bar/foo.c")
-        # Add the same header to the binary and to the library
-        # it should be ignored
-        b2.addHdr("foo/bar/baz.h")
-        b2.addDep(b)
-
-        hdrs = list(b2.getAllHeaders(True))
-        self.assertEqual(len(hdrs), 1)
-
-        hdrs = list(b2.getAllHeaders(False))
-        self.assertEqual(len(hdrs), 2)
-
-        out = b2.__repr__()
-        self.assertEqual(
-            out, "cc_binary(foo) SRCS[foo/bar/foo.c] HDRS[foo/bar/baz.h] DEPS[foo]"
-        )
-
-        bz = BazelBuild()
-        bz.bazelTargets.append(b2)
-        expected = [
-            "cc_binary(",
-            '    name = "foo",',
-            "    srcs = [",
-            '        "foo/bar/foo.c",',
-            "    ],",
-            "    deps = [",
-            '        ":libfoo",',
-            "    ],",
-            ")",
-            "",
-        ]
-        out = bz.genBazelBuildContent()
-        self.assertEqual(out, "\n".join(expected))
-
-    def testBinaryWithDep2(self):
-        b = BazelTarget("cc_library", "libfoo2")
-        b.addSrc("foo/bar/baz.c")
-        b.addHdr("foo/bar/baz.h")
-
-        b2 = BazelTarget("cc_binary", "foo")
-        b2.addSrc("foo/bar/foo.c")
-        # Add the same header to the binary and to the library
-        # it should be ignored
-        b2.addHdr("foo/bar/baz.h")
-        b2.addDep(b)
-
-        hdrs = list(b2.getAllHeaders(True))
-        self.assertEqual(len(hdrs), 1)
-
-        hdrs = list(b2.getAllHeaders(False))
-        self.assertEqual(len(hdrs), 2)
-
-        out = b2.__repr__()
-        self.assertEqual(
-            out, "cc_binary(foo) SRCS[foo/bar/foo.c] HDRS[foo/bar/baz.h] DEPS[libfoo2]"
-        )
-        out_bazel = b2.asBazel()
-        self.assertEqual(
-            out_bazel,
-            [
-                "cc_binary(",
-                '    name = "foo",',
-                "    srcs = [",
-                '        "foo/bar/foo.c",',
-                "    ],",
-                "    deps = [",
-                '        ":libfoo2",',
-                "    ],",
-                ")",
-            ],
-        )
-
-    def testBinaryWithDep(self):
-        b = BazelTarget("cc_library", "foo")
-        b.addSrc("foo/bar/baz.c")
-        b.addHdr("foo/bar/baz.h")
-
-        b2 = BazelTarget("cc_binary", "foo")
-        b2.addSrc("foo/bar/foo.c")
-        # Add the same header to the binary and to the library
-        # it should be ignored
-        b2.addHdr("foo/bar/baz.h")
-        b2.addDep(b)
-
-        hdrs = list(b2.getAllHeaders(True))
-        self.assertEqual(len(hdrs), 1)
-
-        hdrs = list(b2.getAllHeaders(False))
-        self.assertEqual(len(hdrs), 2)
-
-        out = b2.__repr__()
-        self.assertEqual(
-            out, "cc_binary(foo) SRCS[foo/bar/foo.c] HDRS[foo/bar/baz.h] DEPS[foo]"
-        )
-        out_bazel = b2.asBazel()
-        self.assertEqual(
-            out_bazel,
-            [
-                "cc_binary(",
-                '    name = "foo",',
-                "    srcs = [",
-                '        "foo/bar/foo.c",',
-                "    ],",
-                "    deps = [",
-                '        ":libfoo",',
-                "    ],",
-                ")",
-            ],
-        )
-
-    def testSimpleTargetLib(self):
-        b = BazelTarget("cc_library", "foo")
-        b.addSrc("foo/bar/baz.c")
-        b.addHdr("foo/bar/baz.h")
+class TestBazelTarget(unittest.TestCase):
+    def test_simple_target_lib(self):
+        b = BazelTarget("cc_library", "foo", "cpp")
+        b.addSrc(ExportedFile("foo/bar/baz.c", "cpp"))
+        b.addHdr(ExportedFile("foo/bar/baz.h", "cpp"))
 
         hdrs = list(b.getAllHeaders(True))
         self.assertEqual(len(hdrs), 0)
@@ -138,25 +22,23 @@ class TestBazelTests(unittest.TestCase):
         self.assertEqual(out, "cc_library(foo) SRCS[foo/bar/baz.c] HDRS[foo/bar/baz.h]")
 
         out_bazel = b.asBazel()
-        self.assertEqual(
-            out_bazel,
-            [
-                "cc_library(",
-                '    name = "libfoo",',
-                "    srcs = [",
-                '        "foo/bar/baz.c",',
-                "    ],",
-                "    hdrs = [",
-                '        "foo/bar/baz.h",',
-                "    ],",
-                ")",
-            ],
-        )
+        expected_bazel = [
+            "cc_library(",
+            '    name = "libfoo",',
+            "    srcs = [",
+            '        "foo/bar/baz.c",',
+            "    ],",
+            "    hdrs = [",
+            '        "foo/bar/baz.h",',
+            "    ],",
+            ")",
+        ]
+        self.assertEqual(out_bazel, expected_bazel)
 
-    def testSimpleTarget(self):
-        b = BazelTarget("cc_binary", "foo")
-        b.addSrc("foo/bar/baz.c")
-        b.addHdr("foo/bar/baz.h")
+    def test_simple_target(self):
+        b = BazelTarget("cc_binary", "foo", "cpp")
+        b.addSrc(ExportedFile("foo/bar/baz.c", "cpp"))
+        b.addHdr(ExportedFile("foo/bar/baz.h", "cpp"))
 
         hdrs = list(b.getAllHeaders(True))
         self.assertEqual(len(hdrs), 0)
@@ -168,18 +50,72 @@ class TestBazelTests(unittest.TestCase):
         self.assertEqual(out, "cc_binary(foo) SRCS[foo/bar/baz.c] HDRS[foo/bar/baz.h]")
 
         out_bazel = b.asBazel()
-        self.assertEqual(
-            out_bazel,
-            [
-                "cc_binary(",
-                '    name = "foo",',
-                "    srcs = [",
-                '        "foo/bar/baz.c",',
-                '        "foo/bar/baz.h",',
-                "    ],",
-                ")",
-            ],
-        )
+        expected_bazel = [
+            "cc_binary(",
+            '    name = "foo",',
+            "    srcs = [",
+            '        "foo/bar/baz.c",',
+            '        "foo/bar/baz.h",',
+            "    ],",
+            ")",
+        ]
+        self.assertEqual(out_bazel, expected_bazel)
+
+    def test_add_define(self):
+        b = BazelTarget("cc_library", "foo", "cpp")
+        b.addDefine("DEBUG=1")
+        self.assertIn("DEBUG=1", b.defines)
+
+        out_bazel = b.asBazel()
+        expected_bazel = [
+            "cc_library(",
+            '    name = "libfoo",',
+            "    defines = [",
+            "        DEBUG=1,",
+            "    ],",
+            ")",
+        ]
+        self.assertEqual(out_bazel, expected_bazel)
+
+    def test_add_include_dir(self):
+        b = BazelTarget("cc_library", "foo", "cpp")
+        include_dir = IncludeDir(("foo/include", False))
+        b.addIncludeDir(include_dir)
+        self.assertIn(include_dir, b.includeDirs)
+
+        out_bazel = b.asBazel()
+        expected_bazel = [
+            "cc_library(",
+            '    name = "libfoo",',
+            "    copts = [",
+            '        "-I{}".format("foo/include"),',
+            "    ],",
+            ")",
+        ]
+        self.assertEqual(out_bazel, expected_bazel)
+
+    def test_add_dep(self):
+        b = BazelTarget("cc_library", "foo", "cpp")
+        dep = BazelTarget("cc_library", "bar", "cpp")
+        b.addDep(dep)
+        self.assertIn(dep, b.deps)
+
+        out_bazel = b.asBazel()
+        expected_bazel = [
+            "cc_library(",
+            '    name = "libfoo",',
+            "    deps = [",
+            '        ":libbar",',
+            "    ],",
+            ")",
+        ]
+
+        self.assertEqual(out_bazel, expected_bazel)
+
+    def test_add_needed_generated_files(self):
+        b = BazelTarget("cc_library", "foo", "cpp")
+        b.addNeededGeneratedFiles("generated/file.h")
+        self.assertIn("generated/file.h", b.neededGeneratedFiles)
 
 
 if __name__ == "__main__":
