@@ -71,6 +71,8 @@ def isProtoLikeFile(name: str) -> bool:
 
 class NinjaParser:
     def __init__(self, codeRootDir: str):
+        self.generatedFiles: Dict[str, Any] = {}
+        self.missingFiles: Dict[str, List[Build]] = {}
         self.codeRootDir = codeRootDir
         self.buildEdges: List[Build] = []
         self.currentBuild: Optional[List[str]] = None
@@ -90,6 +92,7 @@ class NinjaParser:
         self.ran: Set[Tuple[str, str]] = set()
         self.externals: Dict[str, BuildTarget] = {}
         self.cacheHeaders: Dict[str, CPPIncludes] = {}
+        self.generatedFilesLogged: Set[str] = set()
 
     def getShortName(self, name, workDir=None):
         if name.startswith(self.codeRootDir):
@@ -461,6 +464,8 @@ class NinjaParser:
             if self.cacheHeaders.get(f):
                 logging.debug(f"Already processed {f}")
                 return
+            else:
+                logging.debug(f"Processing {f}")
 
             includes_dirs: Set[str] = set()
             for b in target.usedbybuilds:
@@ -559,9 +564,10 @@ class NinjaParser:
                     if len(cppIncludes.notFoundHeaders) > 0:
                         for h in cppIncludes.notFoundHeaders:
                             if h in self.generatedFiles:
-                                logging.info(
-                                    f"Found missing header {h} in the generated files"
-                                )
+                                if h in self.generatedFilesLogged:
+                                    logging.info(
+                                        f"Found missing header {h} in the generated files"
+                                    )
                             else:
                                 if h not in self.missingFiles:
                                     self.missingFiles[h] = []
@@ -570,20 +576,24 @@ class NinjaParser:
                         (self.getShortName(h[0], workDir), h[1])
                         for h in list(cppIncludes.foundHeaders)
                     ]
-                    # Figure a way to add the builds for the generated files to the list of inputs
-                    # for teh current build
+                    i.setIncludedFiles(allIncludes)
+                    i.setDeps(list(cppIncludes.neededImports))
+                    # Add the builds that produce generated files to the current build
+                    # for the current build
+
                     for h2 in list(cppIncludes.neededGeneratedFiles):
-                        logging.info(f"Needed generated include file {h2}")
+                        if h2 not in self.generatedFilesLogged:
+                            logging.info(f"Needed generated include file {h2}")
+                            self.generatedFilesLogged.add(h2)
                         for bld in self.generatedFiles[h2[0]].outputs:
-                            includeDir = h2[1].replace("/generated", "")
+                            includeDir = h2[1]
                             if bld.name == h2[0]:
                                 # It's a bit weird that we "self" include ourselve
                                 # but that's the only simple way to keep track of the needed
                                 # includeDir
-                                bld.includes.append((h2[0], includeDir))
+                                # bld.includes.add((h2[0], includeDir))
                                 generatedOutputsNeeded.add(bld)
-                    i.setIncludedFiles(allIncludes)
-                    i.setDeps(list(cppIncludes.neededImports))
+                                i.addIncludedFile((h2[0], includeDir))
                 if i.is_a_file and isProtoLikeFile(i.name):
                     includes_dirs = set()
                     for part in build.vars.get("COMMAND", "").split("&&"):
@@ -625,8 +635,6 @@ class NinjaParser:
                     pass
 
     def finalizeHeaders(self, current_dir: str):
-        self.generatedFiles: Dict[str, Any] = {}
-        self.missingFiles: Dict[str, List[Build]] = {}
         # We might want to iterate twice on the values,
         # the first time we might want to get the builds that are custom commands because they are
         # supposed to generate files that are used by other builds

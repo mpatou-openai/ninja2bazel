@@ -123,7 +123,7 @@ class BuildTarget:
         self.usedbybuilds: List["Build"] = []
         self.is_a_file = False
         self.type = TargetType.other
-        self.includes: List[Tuple[str, str]] = []
+        self.includes: Set[Tuple[str, str]] = set()
         self.depends: List[Union[BazelCCImport, "BuildTarget"]] = []
         self.aliases: List[str] = []
         # Is this target the first level (ie. one of the final output of the build) ?
@@ -147,7 +147,10 @@ class BuildTarget:
         return self.name < other.name
 
     def setIncludedFiles(self, files: List[Tuple[str, str]]):
-        self.includes = files
+        self.includes = set(files)
+
+    def addIncludedFile(self, file: Tuple[str, str]):
+        self.includes.add(file)
 
     def setDeps(self, deps: List[Union["BuildTarget", "BazelCCImport"]]):
         self.depends = deps
@@ -324,6 +327,7 @@ class Build:
     ):
         self.outputs: List[BuildTarget] = outputs
         self.rulename: Rule = rulename
+        self.includes: Set[Tuple[str, str]] = set()
         self.inputs: List[BuildTarget] = inputs
         self.depends: Set[BuildTarget] = set(depends)
         self.associatedBazelTarget: Optional[BaseBazelTarget] = None
@@ -469,15 +473,22 @@ class Build:
                     includeDir = d.replace(workDir, "")
                     generated = True
                 elif d.startswith("/generated"):
+                    # it's not very often visited
                     generated = True
                     includeDir = d.replace("/generated", "")
+                    ctx.dest.addIncludeDir(includeDir)
+                    ctx.dest.addNeededGeneratedFiles(i)
+                    logging.debug(f"Skipping adding generated header {i} {includeDir}")
+                    # Do not add the header to the list of headers to the bazel build object, this will be done
+                    # when we will visit the build object for the generated files
+                    continue
                 else:
-                    # Maybe we should look for system headers
-                    # FIXME deal with cc_imports here too
+                    # This should never be visited
                     logging.error(f"{el.name} depends on {i} in {d}")
                     includeDir = "This is wrong"
 
                 if isinstance(ctx.dest, BazelTarget):
+                    logging.debug(f"Adding header {i} {includeDir}")
                     ctx.dest.addHdr(
                         cls._genExportedFile(i, ctx.dest.location),
                         (includeDir, generated),
@@ -749,28 +760,39 @@ chmod a+x $@
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName) + "/"
         outs = genTarget.getOutputs(el.shortName, location)
 
-        if 0:
-            # Not sure why we do this, this feels wrong ... FIXME
-            for t in outs:
-                if ctx.dest is not None:
-                    if t.name.endswith(".h"):
-                        # Figure out if we need some strip_include_prefix by matching the file
-                        # with the diffrent -I flags from the command line
-                        assert isinstance(ctx.dest, BazelTarget)
-                        # Add the header, indicate that it's a generated header
-                        logging.info(
-                            f"Adding generated header {t}, {el.includes[0][1]}"
+        # Generated files are not added (anymore) directly to the bazelTarget when we finalize the
+        # headers, we rely on this part to properly add to the bazelTarget the needed files (mostly
+        # headers)
+        for t in outs:
+            logging.info(
+                f"Looking for generated file {t} in {ctx.dest.neededGeneratedFiles}"
+            )
+            if ctx.dest is not None:
+                if t.name.endswith(".h") and t in ctx.dest.neededGeneratedFiles:
+                    logging.info(f"Found {t} in {ctx.dest.neededGeneratedFiles}")
+                    # Figure out if we need some strip_include_prefix by matching the file
+                    # with the diffrent -I flags from the command line
+                    assert isinstance(ctx.dest, BazelTarget)
+                    # Add the header, indicate that it's a generated header
+                    if len(el.includes) == 0:
+                        ctx.dest.addHdr(t)
+                    if len(el.includes) > 1:
+                        logging.error(
+                            f"There is a problem {t} has more than one include directory and we don't know how to handle that properly (yet), will dump all the directories and hope it will work ..."
                         )
-                        ctx.dest.addHdr(t, (el.includes[0][1], True))
-                    if (
-                        t.name.endswith(".c")
-                        or t.name.endswith(".cc")
-                        or t.name.endswith(".cpp")
-                    ):
-                        ctx.dest.addSrc(t)
-                elif ctx.current is not None:
-                    logging.warn(f"No dest for custom command: {el}")
-                    [ctx.current.addDep(o) for o in outs]
+                    logging.info(el.includes)
+                    for inc in el.includes:
+                        logging.info(f"Adding generated header {t}, {inc[1]}")
+                        ctx.dest.addHdr(t, (inc[1], True))
+                if (
+                    t.name.endswith(".c")
+                    or t.name.endswith(".cc")
+                    or t.name.endswith(".cpp")
+                ):
+                    ctx.dest.addSrc(t)
+            elif ctx.current is not None:
+                logging.warn(f"No dest for custom command: {el}")
+                [ctx.current.addDep(o) for o in outs]
         ctx.next_dest = genTarget
         ctx.current = genTarget
 
@@ -932,12 +954,26 @@ chmod a+x $@
                     keep = False
                 # Maybe some flags like -fdebug-info-for-profiling
                 if keep:
-                    logging.info(f"Adding flag {flag} to copt into {ctx.current.name}")
+                    logging.debug(f"Adding flag {flag} to copt into {ctx.current.name}")
                     ctx.current.addCopt(f'"{flag}"')
 
-            # FLAGS = -fno-semantic-interposition -fno-omit-frame-pointer -fsized-deallocation -gline-tables-only -pthread -fno-omit-frame-pointer -momit-leaf-frame-pointer -fcoroutines -gdwarf-aranges -fdebug-info-for-profiling -fno-semantic-interposition
             for i in build.inputs:
-                for j in i.includes or []:
+                # Most of it it dealt by HandleFileForBazel
+                if i.type == TargetType.manually_generated:
+                    continue
+                if i.is_a_file:
+                    continue
+                if i.producedby is not None:
+                    logging.info(
+                        f"Skipping produced {i} to find includes, it should be dealt by its build"
+                    )
+                    continue
+                logging.info(f"Iterating over {i}")
+                # This should be almost useless now because generated includes are attached to the
+                # C/C++ file that requires them and the processing of it will be partially done in
+                # the HandleFileForBazel and while visiting the build
+                assert False
+                for j in list(i.includes) or []:
                     includeFile = j[0]
                     includeDirFull = j[1]
                     generated = False
@@ -946,7 +982,7 @@ chmod a+x $@
                         generated = True
                     else:
                         includeDir = includeDirFull.replace(ctx.rootdir, "")
-                    logging.debug(
+                    logging.info(
                         f"Adding include {includeFile} from {includeDir} generated {generated} full dir {j[1]}"
                     )
                     ctx.current.addHdr(
