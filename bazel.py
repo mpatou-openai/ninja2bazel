@@ -203,6 +203,7 @@ class BazelTarget(BaseBazelTarget):
         self.addPrefixIfRequired: bool = True
         self.copts: set[str] = set()
         self.defines: set[str] = set()
+        self.neededGeneratedFiles = set()
 
     def targetName(self) -> str:
         return f":{self.depName()}"
@@ -238,6 +239,12 @@ class BazelTarget(BaseBazelTarget):
 
     def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
         self.deps.add(target)
+
+    def addIncludeDir(self, includeDir: IncludeDir):
+        self.includeDirs.add(includeDir)
+
+    def addNeededGeneratedFiles(self, filename: str):
+        self.neededGeneratedFiles.add(filename)
 
     def addHdr(self, target: BaseBazelTarget, includeDir: Optional[IncludeDir] = None):
         if "//" in target.name:
@@ -555,6 +562,11 @@ class BazelGenRuleTargetOutput(BaseBazelTarget):
 
     def targetName(self) -> str:
         return f":{self.name}"
+
+    def getAllHeaders(self, deps_only=False):
+        if self.name.endswith(".h"):
+            return [self.name]
+        return []
 
 
 class PyBinaryBazelTarget(BaseBazelTarget):
