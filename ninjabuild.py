@@ -92,7 +92,7 @@ class NinjaParser:
         self.ran: Set[Tuple[str, str]] = set()
         self.externals: Dict[str, BuildTarget] = {}
         self.cacheHeaders: Dict[str, CPPIncludes] = {}
-        self.generatedFilesLogged: Set[str] = set()
+        self.generatedFilesLogged: Set[Tuple[str, str]] = set()
 
     def getShortName(self, name, workDir=None):
         if name.startswith(self.codeRootDir):
@@ -811,7 +811,8 @@ def printGraph(element: BuildTarget, ident: int = 0, file=sys.stdout):
             if d.producedby is None and d.type == TargetType.external:
                 print(" " * (ctx.ident + 1) + f"  {d.name} (external)")
 
-    ctx = PrintVisitorContext(ident, file)
+
+    ctx = PrintVisitorContext(ident, file) # type: ignore
 
     element.visitGraph(visitor, ctx)
 
