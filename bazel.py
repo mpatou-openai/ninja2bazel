@@ -419,6 +419,9 @@ class BazelCCProtoLibrary(BaseBazelTarget):
         assert isinstance(dep, BazelProtoLibrary)
         self.deps.add(dep)
 
+    def targetName(self) -> str:
+        return f":{self.name}"
+
     def getAllHeaders(self, deps_only=False):
         # FIXME
         return []
@@ -458,6 +461,9 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
 
     def getGlobalImport(self):
         return 'load("@com_github_grpc_grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")'
+
+    def targetName(self) -> str:
+        return f":{self.name}"
 
     def asBazel(self) -> List[str]:
         ret = []
@@ -507,6 +513,9 @@ class BazelProtoLibrary(BaseBazelTarget):
     def getAllHeaders(self, deps_only=False):
         # FIXME
         return []
+    
+    def targetName(self):
+        return f":{super().targetName()}"
 
     def asBazel(self) -> List[str]:
         ret = []
