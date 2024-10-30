@@ -780,7 +780,7 @@ chmod a+x $@
                 if t.name.endswith(".h") and t in ctx.dest.neededGeneratedFiles:
                     logging.info(f"Found {t} in {ctx.dest.neededGeneratedFiles}")
                     # Figure out if we need some strip_include_prefix by matching the file
-                    # with the diffrent -I flags from the command line
+                    # with the different -I flags from the command line
                     assert isinstance(ctx.dest, BazelTarget)
                     # Add the header, indicate that it's a generated header
                     if len(el.includes) == 0:
