@@ -390,6 +390,7 @@ class NinjaParser:
         exe = cmd.split(" ")
         if exe[0].endswith("/protoc"):
             for f in outputs:
+                logging.info(f"Generating {f} with protoc")
                 self.generatedFiles[f] = build
             # Should generate empty files
             # skip protoc
@@ -593,6 +594,7 @@ class NinjaParser:
                             # do something else for protobuf like files
                             for out in self.generatedFiles[h2[0]].outputs:
                                 if out.name == h2[0]:
+                                    logging.info(f"Looking at build {build} {out.name} with header {h2[0]}")
                                     build.depends.add(out)
                             continue
                         for bld in self.generatedFiles[h2[0]].outputs:

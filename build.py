@@ -593,7 +593,7 @@ class Build:
             ctx.current = savedCurrent
             ctx.next_current = savedCurrent
             # Maybe we still want to continue ... tbd
-            return
+            # return
         if self.associatedBazelTarget is None:
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
             t = BazelProtoLibrary(f"{proto}_proto", location)
@@ -613,11 +613,18 @@ class Build:
             tmp: BaseBazelTarget = t
         else:
             tmp = self.associatedBazelTarget
+        logging.info(
+            f"Handling protobuf {el.name} current={type(ctx.current)} adding {tmp.name}"
+        )
 
         if isinstance(ctx.current, BazelGRPCCCProtoLibrary):
+            logging.info(f"Before: for {ctx.current.name} {ctx.current.srcs}")
             ctx.current.addSrc(tmp)
+            logging.info(f"After: for {ctx.current.name} {ctx.current.srcs}")
         elif isinstance(ctx.current, BazelCCProtoLibrary):
+            logging.info(f"Before: for {ctx.current.name} {ctx.current.deps}")
             ctx.current.addDep(tmp)
+            logging.info(f"After: for {ctx.current.name} {ctx.current.deps}")
         ctx.current = tmp
 
     def canGenerateFinal(self) -> bool:
@@ -862,6 +869,8 @@ chmod a+x $@
             proto = matches.group(1)
 
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+
+            logging.info(f"Creating a proto cc library {proto}_cc_proto {location}")
             t: BaseBazelTarget = BazelCCProtoLibrary(f"{proto}_cc_proto", location)
             ctx.current.addDep(t)
             ctx.bazelbuild.bazelTargets.add(t)
@@ -948,6 +957,7 @@ chmod a+x $@
         if self.rulename.name == "CUSTOM_COMMAND" and "bin/protoc" in self.vars.get(
             "COMMAND", ""
         ):
+            logging.info(f"Visiting protobuf {el}")
             return self._handleProtobufForBazelGen(ctx, el, cmd)
         if self.rulename.name == "CUSTOM_COMMAND":
             return self._handleCustomCommandForBazelGen(ctx, el, cmd)
