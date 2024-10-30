@@ -392,9 +392,9 @@ class Build:
             logging.info(f"Visiting deps for {el.name}")
             for dep in el.depends:
                 logging.info(f"Visiting dep {dep}")
-                if ctx.dest is not None:
+                if ctx.current is not None:
                     if isinstance(dep, BazelCCImport):
-                        ctx.dest.addDep(dep)
+                        ctx.current.addDep(dep)
                         ctx.bazelbuild.bazelTargets.add(dep)
                     elif isinstance(dep, Build):
                         logging.info(f"Dep {dep} is a Build")
@@ -412,7 +412,7 @@ class Build:
                 ctx.bazelbuild.bazelTargets.add(maybe_cc_import)
                 return
         # logging.info(f"handleFileForBazelGen {el.name}")
-        if not ctx.dest:
+        if not ctx.current:
             # It can happen that .o are not connected to a real library or binary but just
             # to phony targets in this case "dest" is NotImplemented
             # logging.warn(f"{el} is no connected to a non phony target")
@@ -426,45 +426,49 @@ class Build:
             # TODO I have the feeling that we could extrapolate the location of the header here
             # FIXME Not clear if this is ever visted
             logging.info(f"Handling generated file header {el.name}")
-            if isinstance(ctx.dest, BazelTarget):
-                ctx.dest.addHdr(cls._genExportedFile(el.shortName, ctx.dest.location))
+            if isinstance(ctx.current, BazelTarget):
+                ctx.current.addHdr(
+                    cls._genExportedFile(el.shortName, ctx.current.location)
+                )
             else:
                 logging.warn(
-                    f"{el} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
+                    f"{el} is a header file but {ctx.current} is not a BazelTarget that can have headers"
                 )
         elif el.name.endswith(".proto") and el.includes is None:
             logging.warn(f"{el.name} is a protobuf and includes is none")
         elif el.name.endswith(".proto") and el.includes is not None:
-            if not isinstance(ctx.dest, BazelProtoLibrary):
+            if not isinstance(ctx.current, BazelProtoLibrary):
                 # because of C++ libraries and binaries might depends directly on protobufs target output files (.h)
-                # we end up visiting protobuf files and ctx.dest is pointing to the c++ library or binary
+                # we end up visiting protobuf files and ctx.current is pointing to the c++ library or binary
                 # we don't want to add it here
                 return
-            logging.info(f"About to add proto {el.name} with includes {el.includes} to {ctx.dest.name} ")
-            ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
+            logging.info(
+                f"About to add proto {el.name} with includes {el.includes} to {ctx.current.name} "
+            )
+            ctx.current.addSrc(cls._genExportedFile(el.shortName, ctx.current.location))
             # Protobuf shouldn't have additional dependencies, so let's skip parsing el.deps
 
             # Includes for a protobuf are just other protobufs files
             if len(el.includes) == 0:
                 return
-            t = BazelProtoLibrary(f"sub_{ctx.dest.name}", ctx.dest.location)
+            t = BazelProtoLibrary(f"sub_{ctx.current.name}", ctx.current.location)
             ctx.bazelbuild.bazelTargets.add(t)
-            ctx.dest.addDep(t)
+            ctx.current.addDep(t)
             for i, d in el.includes:
                 t.addSrc(
-                    cls._genExportedFile(f"{d}{os.path.sep}{i}", ctx.dest.location)
+                    cls._genExportedFile(f"{d}{os.path.sep}{i}", ctx.current.location)
                 )
-                stripPrefix = d.replace(ctx.dest.location + os.path.sep, "")
+                stripPrefix = d.replace(ctx.current.location + os.path.sep, "")
                 t.stripImportPrefix = stripPrefix
         else:
             if el.type == TargetType.external:
-                logging.info(f"Dealing with external dep {el.name} {ctx.dest}")
+                logging.info(f"Dealing with external dep {el.name} {ctx.current}")
                 return
             # Not produced aka it's a file
             # we have to parse the file and see if there is any includes
             # if it's a "" include then we look first in the path where the file is and then
             # in the path specified with -I
-            ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
+            ctx.current.addSrc(cls._genExportedFile(el.shortName, ctx.current.location))
 
             if el.includes is None:
                 return
@@ -484,8 +488,8 @@ class Build:
                     # it's not very often visited
                     generated = True
                     includeDir = d.replace("/generated", "")
-                    ctx.dest.addIncludeDir(includeDir)  # type ignore
-                    ctx.dest.addNeededGeneratedFiles(i)  # type ignore
+                    ctx.current.addIncludeDir(includeDir)  # type ignore
+                    ctx.current.addNeededGeneratedFiles(i)  # type ignore
                     logging.debug(f"Skipping adding generated header {i} {includeDir}")
                     # Do not add the header to the list of headers to the bazel build object, this will be done
                     # when we will visit the build object for the generated files
@@ -495,17 +499,17 @@ class Build:
                     logging.error(f"{el.name} depends on {i} in {d}")
                     includeDir = "This is wrong"
 
-                if isinstance(ctx.dest, BazelTarget):
+                if isinstance(ctx.current, BazelTarget):
                     logging.debug(f"Adding header {i} {includeDir}")
-                    ctx.dest.addHdr(
-                        cls._genExportedFile(i, ctx.dest.location),
+                    ctx.current.addHdr(
+                        cls._genExportedFile(i, ctx.current.location),
                         (includeDir, generated),
                     )
                 else:
                     logging.warn(
-                        f"{i} is a header file but {ctx.dest} is not a BazelTarget that can have headers"
+                        f"{i} is a header file but {ctx.current} is not a BazelTarget that can have headers"
                     )
-            if not isinstance(ctx.dest, BazelTarget):
+            if not isinstance(ctx.current, BazelTarget):
                 return
 
     @classmethod
@@ -521,18 +525,18 @@ class Build:
         logging.info(f"handleManuallyGeneratedForBazelGen for {el.name}")
         # We don't add the manually generated target to the list of target to generate because we
         # expect it to be well generated manually by the user
-        if ctx.dest is not None:
+        if ctx.current is not None:
             if el.name.endswith(".cc"):
-                ctx.dest.addSrc(t)
+                ctx.current.addSrc(t)
             if el.name.endswith(".h"):
-                assert isinstance(ctx.dest, BazelTarget)
-                ctx.dest.addHdr(t)
+                assert isinstance(ctx.current, BazelTarget)
+                ctx.current.addHdr(t)
 
     @classmethod
     def handlePhonyForBazelGen(
         cls, ctx: BazelBuildVisitorContext, el: "BuildTarget", build: "Build"
     ):
-        if ctx.dest is None:
+        if ctx.current is None:
             logging.debug(f"{el} is a phony target")
 
     @classmethod
@@ -558,7 +562,7 @@ class Build:
     def _handleProtobufForBazelGen(
         self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
     ):
-        assert ctx.current is not None or ctx.dest is not None
+        assert ctx.current is not None
         if self.associatedBazelTarget is None:
             arr = el.name.split(os.path.sep)
             filename = arr[-1]
@@ -587,19 +591,16 @@ class Build:
                     # if path.startswith("/"):
                     #     path = path[1:]
                     t.addSrc(self._genExportedFile(path, location))
-            if isinstance(ctx.current, BazelGRPCCCProtoLibrary):
-                ctx.current.addSrc(t)
-            elif isinstance(ctx.current, BazelCCProtoLibrary):
-                ctx.current.addDep(t)
-            ctx.next_dest = t
 
+            tmp: BaseBazelTarget = t
         else:
             tmp = self.associatedBazelTarget
-            if isinstance(ctx.current, BazelGRPCCCProtoLibrary):
-                ctx.current.addSrc(tmp)
-            elif isinstance(ctx.current, BazelCCProtoLibrary):
-                ctx.current.addDep(tmp)
-            ctx.next_dest = tmp
+
+        if isinstance(ctx.current, BazelGRPCCCProtoLibrary):
+            ctx.current.addSrc(tmp)
+        elif isinstance(ctx.current, BazelCCProtoLibrary):
+            ctx.current.addDep(tmp)
+        ctx.current = tmp
 
     def canGenerateFinal(self) -> bool:
         ret = self.getCoreCommand()
@@ -770,19 +771,19 @@ chmod a+x $@
         # headers, we rely on this part to properly add to the bazelTarget the needed files (mostly
         # headers)
         for t in outs:
-            if ctx.dest is not None:
+            if ctx.current is not None:
                 logging.info(
-                    f"Looking for generated file {t} in {ctx.dest.neededGeneratedFiles}"
+                    f"Looking for generated file {t} in {ctx.current.neededGeneratedFiles}"
                 )
                 # ignoretype
-                if t.name.endswith(".h") and t in ctx.dest.neededGeneratedFiles:
-                    logging.info(f"Found {t} in {ctx.dest.neededGeneratedFiles}")
+                if t.name.endswith(".h") and t in ctx.current.neededGeneratedFiles:
+                    logging.info(f"Found {t} in {ctx.current.neededGeneratedFiles}")
                     # Figure out if we need some strip_include_prefix by matching the file
                     # with the different -I flags from the command line
-                    assert isinstance(ctx.dest, BazelTarget)
+                    assert isinstance(ctx.current, BazelTarget)
                     # Add the header, indicate that it's a generated header
                     if len(el.includes) == 0:
-                        ctx.dest.addHdr(t)
+                        ctx.current.addHdr(t)
                     if len(el.includes) > 1:
                         logging.error(
                             f"There is a problem {t} has more than one include directory and we don't know how to handle that properly (yet), will dump all the directories and hope it will work ..."
@@ -790,25 +791,26 @@ chmod a+x $@
                     logging.info(el.includes)
                     for inc in el.includes:
                         logging.info(f"Adding generated header {t}, {inc[1]}")
-                        ctx.dest.addHdr(t, (inc[1], True))
+                        ctx.current.addHdr(t, (inc[1], True))
                 if (
                     t.name.endswith(".c")
                     or t.name.endswith(".cc")
                     or t.name.endswith(".cpp")
                 ):
-                    ctx.dest.addSrc(t)
+                    ctx.current.addSrc(t)
             elif ctx.current is not None:
                 logging.warn(f"No dest for custom command: {el}")
                 [ctx.current.addDep(o) for o in outs]
-        ctx.next_dest = genTarget
         ctx.current = genTarget
 
-    def _handleGRPCCCProtobuf(self, ctx: BazelBuildVisitorContext, el: BuildTarget, skipCheck: bool = False):
+    def _handleGRPCCCProtobuf(
+        self, ctx: BazelBuildVisitorContext, el: BuildTarget, skipCheck: bool = False
+    ):
         assert ctx.current is not None
         if self.associatedBazelTarget is None:
             arr = el.name.split(os.path.sep)
             filename = arr[-1]
-            regex=r'(.*)\.grpc\.pb\.(cc\.o|h)'
+            regex = r"(.*)\.grpc\.pb\.(cc\.o|h)"
             matches = re.match(regex, filename)
             if matches is None:
                 logging.info(f"Filename is {filename}")
@@ -816,27 +818,27 @@ chmod a+x $@
             proto = matches.group(1)
 
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-            t = BazelGRPCCCProtoLibrary(f"{proto}_cc_grpc", location)
-            ctx.current.addDep(t)
+            t: BaseBazelTarget = BazelGRPCCCProtoLibrary(f"{proto}_cc_grpc", location)
             ctx.bazelbuild.bazelTargets.add(t)
             if not skipCheck:
                 self.setAssociatedBazelTarget(t)
             for tgt in ctx.bazelbuild.bazelTargets:
                 if tgt.name == f"{proto}_cc_proto":
                     t.addDep(tgt)
-            ctx.next_current = t
-            ctx.current = t
         else:
-            ctx.current.addDep(self.associatedBazelTarget)
-            ctx.next_current = self.associatedBazelTarget
-            ctx.current = self.associatedBazelTarget
+            t = self.associatedBazelTarget
+        ctx.current.addDep(t)
+        ctx.next_current = t
+        ctx.current = t
 
-    def _handleCCProtobuf(self, ctx: BazelBuildVisitorContext, el: BuildTarget, skipCheck: bool =False):
+    def _handleCCProtobuf(
+        self, ctx: BazelBuildVisitorContext, el: BuildTarget, skipCheck: bool = False
+    ):
         assert ctx.current is not None
         if self.associatedBazelTarget is None or skipCheck:
             arr = el.name.split(os.path.sep)
             filename = arr[-1]
-            regex=r'(.*)\.pb\.(cc\.o|h)'
+            regex = r"(.*)\.pb\.(cc\.o|h)"
             matches = re.match(regex, filename)
             assert matches is not None
             proto = matches.group(1)
@@ -855,8 +857,8 @@ chmod a+x $@
         else:
             t = self.associatedBazelTarget
             ctx.current.addDep(t)
-        ctx.next_current = self.associatedBazelTarget
-        ctx.current = self.associatedBazelTarget
+        ctx.next_current = t
+        ctx.current = t
 
     def _handleCPPLinkExecutableCommand(
         self, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
