@@ -435,11 +435,16 @@ class Build:
         elif el.name.endswith(".proto") and el.includes is None:
             logging.warn(f"{el.name} is a protobuf and includes is none")
         elif el.name.endswith(".proto") and el.includes is not None:
+            if not isinstance(ctx.dest, BazelProtoLibrary):
+                # because of C++ libraries and binaries might depends directly on protobufs target output files (.h)
+                # we end up visiting protobuf files and ctx.dest is pointing to the c++ library or binary
+                # we don't want to add it here
+                return
+            logging.info(f"About to add proto {el.name} with includes {el.includes} to {ctx.dest.name} ")
             ctx.dest.addSrc(cls._genExportedFile(el.shortName, ctx.dest.location))
             # Protobuf shouldn't have additional dependencies, so let's skip parsing el.deps
 
-            # I don't remember what are the includes in the case of a protobuf
-            logging.info(f"{el.name} is a protobuf and includes are {el.includes}")
+            # Includes for a protobuf are just other protobufs files
             if len(el.includes) == 0:
                 return
             t = BazelProtoLibrary(f"sub_{ctx.dest.name}", ctx.dest.location)
