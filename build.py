@@ -484,8 +484,8 @@ class Build:
                     # it's not very often visited
                     generated = True
                     includeDir = d.replace("/generated", "")
-                    ctx.dest.addIncludeDir(includeDir)
-                    ctx.dest.addNeededGeneratedFiles(i)
+                    ctx.dest.addIncludeDir(includeDir)  # type ignore
+                    ctx.dest.addNeededGeneratedFiles(i)  # type ignore
                     logging.debug(f"Skipping adding generated header {i} {includeDir}")
                     # Do not add the header to the list of headers to the bazel build object, this will be done
                     # when we will visit the build object for the generated files
