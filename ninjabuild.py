@@ -391,7 +391,6 @@ class NinjaParser:
         if exe[0].endswith("/protoc"):
             for f in outputs:
                 self.generatedFiles[f] = build
-                pass
             # Should generate empty files
             # skip protoc
             return
@@ -589,6 +588,13 @@ class NinjaParser:
                         if h2 not in self.generatedFilesLogged:
                             logging.info(f"Needed generated include file {h2}")
                             self.generatedFilesLogged.add(h2)
+
+                        if h2[0].endswith(".pb.h"):
+                            # do something else for protobuf like files
+                            for out in self.generatedFiles[h2[0]].outputs:
+                                if out.name == h2[0]:
+                                    build.depends.add(out)
+                            continue
                         for bld in self.generatedFiles[h2[0]].outputs:
                             includeDir = h2[1]
                             if bld.name == h2[0]:
@@ -597,7 +603,7 @@ class NinjaParser:
                                 # includeDir
                                 # bld.includes.add((h2[0], includeDir))
                                 generatedOutputsNeeded.add(bld)
-                                i.addIncludedFile((h2[0], includeDir))
+                        i.addIncludedFile((h2[0], includeDir))
                 if i.is_a_file and isProtoLikeFile(i.name):
                     includes_dirs = set()
                     for part in build.vars.get("COMMAND", "").split("&&"):
