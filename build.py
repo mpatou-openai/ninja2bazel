@@ -563,17 +563,38 @@ class Build:
         self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
     ):
         assert ctx.current is not None
+        arr = el.name.split(os.path.sep)
+        filename = arr[-1]
+        # TODO use negative forward looking
+        regex = r"([^.]*)(\.grpc)?\.pb\.(cc|h)"
+        match = re.match(regex, filename)
+        if not match:
+            logging.info("not a match")
+            return
+        proto = match.group(1)
+        if match.group(2) is None:
+            grpc = False
+        else:
+            grpc = True
+        header = match.group(3) == "h"
+        if header and ctx.current is not None:
+            # We can face a situation where some headers require a pb.h or grpc.pb.h file
+            # and so this buildTarget that is built by protoc is a dependency on them and so gets visited
+            # we can't add the proto file as dependency instead either we take a cc_proto_library or a cc_grpc_library
+            logging.info(
+                f"Looking at header = {header} grpc = {grpc} {len(match.groups())} proto byproduct from {proto} to add to {ctx.current.name}"
+            )
+            # The following function will mess up the dest/current
+            savedCurrent = ctx.current
+            if grpc:
+                self._handleGRPCCCProtobuf(ctx, el, True)
+            else:
+                self._handleCCProtobuf(ctx, el, True)
+            ctx.current = savedCurrent
+            ctx.next_current = savedCurrent
+            # Maybe we still want to continue ... tbd
+            return
         if self.associatedBazelTarget is None:
-            arr = el.name.split(os.path.sep)
-            filename = arr[-1]
-            # TODO use negative forward looking
-            regex = r"([^.]*)(?:\.grpc)?\.pb\.(?:cc|h)"
-            match = re.match(regex, filename)
-            if not match:
-                logging.info("not a match")
-                return
-            proto = match.group(1)
-
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
             t = BazelProtoLibrary(f"{proto}_proto", location)
             ctx.bazelbuild.bazelTargets.add(t)
