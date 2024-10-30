@@ -471,6 +471,10 @@ class NinjaParser:
             for b in target.usedbybuilds:
                 includes = b.vars.get("INCLUDES", "")
                 if includes != "":
+                    # Find the first build where we have includes and
+                    # for those include replace workDir by the tempTopFolder
+                    # so that we have a chance of finding our generated headers
+
                     includes_dirs = parseIncludes(includes)
                     updated_include_dirs = []
                     for dir in includes_dirs:
@@ -610,7 +614,8 @@ class NinjaParser:
                         f = f.replace(d + os.path.sep, "")
                         includesFiles.append((f, d))
                     i.setIncludedFiles(includesFiles)
-
+            # TODO revisit if we need to extend the inputs o: the dependencies of the build
+            # dependencies might have a side effect that is not desirable for generated files
             build.inputs.extend(list(generatedOutputsNeeded))
 
     def _finalizeHeadersForGeneratedFiles(self, current_dir: str):
