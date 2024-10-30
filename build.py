@@ -35,9 +35,6 @@ class BazelBuildVisitorContext(VisitorContext):
     def setup_subcontext(self) -> "VisitorContext":
         newCtx = BazelBuildVisitorContext(**self.__dict__)
         # Never copy the next desitnation from the parent context
-        newCtx.next_dest = None
-        if self.next_dest is not None:
-            newCtx.dest = self.next_dest
         return newCtx
 
     def cleanup(self):
@@ -1000,7 +997,7 @@ chmod a+x $@
                 # protobuf
                 self._handleCCProtobuf(ctx, el)
             else:
-                ctx.dest = ctx.current
+                ctx.next_dest = ctx.current
                 # compilation of a source file to an object file, this is taken care by
                 # bazel targets like cc_binary or cc_library
             return
