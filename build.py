@@ -587,9 +587,6 @@ class Build:
                         f"Proto input for {ctx.rootdir} {el.name.replace(ctx.rootdir, '')}: {e.name.replace(ctx.rootdir, '')}"
                     )
                     path = e.name.replace(ctx.rootdir, "")
-                    # .replace(location, "")
-                    # if path.startswith("/"):
-                    #     path = path[1:]
                     t.addSrc(self._genExportedFile(path, location))
 
             tmp: BaseBazelTarget = t
