@@ -108,7 +108,6 @@ class TopLevelGroupingStrategy(BuildFileGroupingStrategy):
 
 @total_ordering
 class BuildTarget:
-
     def __init__(
         self,
         name: str,
@@ -394,9 +393,14 @@ class Build:
             for dep in el.depends:
                 logging.info(f"Visiting dep {dep}")
                 if ctx.dest is not None:
-                    assert isinstance(dep, BazelCCImport)
-                    ctx.dest.addDep(dep)
-                    ctx.bazelbuild.bazelTargets.add(dep)
+                    if isinstance(dep, BazelCCImport):
+                        ctx.dest.addDep(dep)
+                        ctx.bazelbuild.bazelTargets.add(dep)
+                    elif isinstance(dep, Build):
+                        logging.info(f"Dep {dep} is a Build")
+                    else:
+                        logging.warn(f"Visiting {dep} but don't know what to do")
+
         if (
             el.type == TargetType.external
             and el.opaque is not None
