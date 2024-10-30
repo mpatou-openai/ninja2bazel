@@ -161,7 +161,7 @@ class BaseBazelTarget(object):
         raise NotImplementedError(f"Class {self.__class__} doesn't implement addDep")
 
     def addSrc(self, target: "BaseBazelTarget"):
-        raise NotImplementedError
+        raise NotImplementedError(f"addSrc not implemented for {self.__class__}")
 
     def asBazel(self) -> List[str]:
         raise NotImplementedError
@@ -513,7 +513,7 @@ class BazelProtoLibrary(BaseBazelTarget):
     def getAllHeaders(self, deps_only=False):
         # FIXME
         return []
-    
+
     def targetName(self):
         return f":{super().targetName()}"
 
