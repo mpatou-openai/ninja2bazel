@@ -2,7 +2,10 @@ import logging
 import os
 import re
 from functools import total_ordering
-from typing import Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Type, TypeVar, Union
+
+# Define a type variable that can be any type
+T = TypeVar("T")
 
 IncludeDir = tuple[str, bool]
 
@@ -626,3 +629,18 @@ class ShBinaryBazelTarget(BaseBazelTarget):
 
     def addSrc(self, target: BaseBazelTarget):
         self.srcs.add(target)
+
+
+cache: Dict[str, Any] = {}
+
+
+def getObject(cls: Type[T], *kargs) -> T:
+    key = f"{cls}" + " ".join(kargs)
+    obj = cache.get(key)
+    if obj:
+        logging.info(f"Cache hit for {key} {type(obj)}")
+        assert isinstance(obj, cls)
+        return obj
+    obj = cls(*kargs)  # type: ignore
+    cache[key] = obj
+    return obj

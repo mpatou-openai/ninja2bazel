@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 from bazel import (BaseBazelTarget, BazelBuild, BazelCCImport,
                    BazelCCProtoLibrary, BazelGenRuleTarget,
                    BazelGRPCCCProtoLibrary, BazelProtoLibrary, BazelTarget,
-                   ExportedFile, ShBinaryBazelTarget)
+                   ExportedFile, ShBinaryBazelTarget, getObject)
 from visitor import VisitorContext
 
 VisitorType = Callable[["BuildTarget", "VisitorContext", bool], bool]
@@ -451,7 +451,9 @@ class Build:
             # Includes for a protobuf are just other protobufs files
             if len(el.includes) == 0:
                 return
-            t = BazelProtoLibrary(f"sub_{ctx.current.name}", ctx.current.location)
+            t = getObject(
+                BazelProtoLibrary, f"sub_{ctx.current.name}", ctx.current.location
+            )
             ctx.bazelbuild.bazelTargets.add(t)
             ctx.current.addDep(t)
             for i, d in el.includes:
@@ -596,7 +598,7 @@ class Build:
             # return
         if self.associatedBazelTarget is None:
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-            t = BazelProtoLibrary(f"{proto}_proto", location)
+            t = getObject(BazelProtoLibrary, f"{proto}_proto", location)
             ctx.bazelbuild.bazelTargets.add(t)
             self.setAssociatedBazelTarget(t)
 
@@ -646,7 +648,7 @@ class Build:
             name = el.shortName.replace("/", "_").replace(".", "_")
 
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-            genTarget = BazelGenRuleTarget(f"{name}_command", location)
+            genTarget = getObject(BazelGenRuleTarget, f"{name}_command", location)
 
             allInputs: List[str] = []
             regex = f"^{ctx.rootdir}/?"
@@ -736,7 +738,9 @@ class Build:
                             logging.info(f"{arg} not found in the output hope it's ok")
                         alteredArgs.append(arg)
                 # Generate a shell script to run the custom command
-                buildTarget = BazelGenRuleTarget(f"{name}_cmd_build", location)
+                buildTarget = getObject(
+                    BazelGenRuleTarget, f"{name}_cmd_build", location
+                )
                 buildTarget.addOut(f"{name}_cmd.sh")
                 # Add the sha1 of all inputs to force rebuild if intput file changes
 
@@ -843,7 +847,9 @@ chmod a+x $@
             proto = matches.group(1)
 
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-            t: BaseBazelTarget = BazelGRPCCCProtoLibrary(f"{proto}_cc_grpc", location)
+            t: BaseBazelTarget = getObject(
+                BazelGRPCCCProtoLibrary, f"{proto}_cc_grpc", location
+            )
             ctx.bazelbuild.bazelTargets.add(t)
             if not skipCheck:
                 self.setAssociatedBazelTarget(t)
@@ -871,7 +877,9 @@ chmod a+x $@
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
 
             logging.info(f"Creating a proto cc library {proto}_cc_proto {location}")
-            t: BaseBazelTarget = BazelCCProtoLibrary(f"{proto}_cc_proto", location)
+            t: BaseBazelTarget = getObject(
+                BazelCCProtoLibrary, f"{proto}_cc_proto", location
+            )
             ctx.current.addDep(t)
             ctx.bazelbuild.bazelTargets.add(t)
             if not skipCheck:
@@ -892,7 +900,7 @@ chmod a+x $@
     ):
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
         if self.associatedBazelTarget is None:
-            t = BazelTarget("cc_binary", el.name, location)
+            t = getObject(BazelTarget, "cc_binary", el.name, location)
             nextCurrent = t
             ctx.bazelbuild.bazelTargets.add(t)
             self.setAssociatedBazelTarget(t)
@@ -913,12 +921,18 @@ chmod a+x $@
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
         if self.associatedBazelTarget is None:
             if self.vars.get("SONAME") is not None:
-                staticLibTarget = BazelTarget(
-                    "cc_library", "inner_" + el.shortName.replace("/", "_"), location
+                staticLibTarget = getObject(
+                    BazelTarget,
+                    "cc_library",
+                    "inner_" + el.shortName.replace("/", "_"),
+                    location,
                 )
                 staticLibTarget.addPrefixIfRequired = False
-                t = BazelTarget(
-                    "cc_shared_library", el.shortName.replace("/", "_"), location
+                t = getObject(
+                    BazelTarget,
+                    "cc_shared_library",
+                    el.shortName.replace("/", "_"),
+                    location,
                 )
 
                 t.addPrefixIfRequired = False
@@ -926,7 +940,7 @@ chmod a+x $@
                 ctx.bazelbuild.bazelTargets.add(staticLibTarget)
                 nextCurrent = staticLibTarget
             else:
-                t = BazelTarget("cc_binary", el.name, location)
+                t = getObject(BazelTarget, "cc_binary", el.name, location)
                 nextCurrent = t
             ctx.bazelbuild.bazelTargets.add(t)
             self.setAssociatedBazelTarget(t)
@@ -1056,7 +1070,7 @@ chmod a+x $@
         if self.isStaticArchiveCommand(cmd):
             assert len(self.outputs) == 1
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-            t = BazelTarget("cc_library", el.name, location)
+            t = getObject(BazelTarget, "cc_library", el.name, location)
             if ctx.current is not None:
                 ctx.current.addDep(t)
             ctx.current = t
