@@ -554,6 +554,10 @@ class NinjaParser:
                             updated_include_dirs.append(
                                 dir.replace(workDir, "/generated")
                             )
+                        elif workDir.endswith('/') and dir.startswith(workDir[:-1]):
+                            updated_include_dirs.append(
+                                dir.replace(workDir[:-1], "/generated")
+                            )
                         else:
                             updated_include_dirs.append(dir)
 
