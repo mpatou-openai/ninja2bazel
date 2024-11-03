@@ -505,6 +505,8 @@ class NinjaParser:
                 self.compilerIncludes,
                 self.cc_imports,
                 self.generatedFiles,
+                None,
+                True,
             )
             if len(cppIncludes.notFoundHeaders) > 0 and includes != "":
                 logging.warning(
