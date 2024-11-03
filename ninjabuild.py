@@ -391,7 +391,7 @@ class NinjaParser:
         if exe[0].endswith("/protoc"):
             for f in outputs:
                 logging.info(f"Generating {f} with protoc")
-                self.generatedFiles[f] = build
+                self.generatedFiles[f] = (build, None)
             # Should generate empty files
             # skip protoc
             return
@@ -596,7 +596,7 @@ class NinjaParser:
 
                         if h2[0].endswith(".pb.h"):
                             # do something else for protobuf like files
-                            for out in self.generatedFiles[h2[0]].outputs:
+                            for out in self.generatedFiles[h2[0]][0].outputs:
                                 if out.name == h2[0]:
                                     logging.info(f"Looking at build {build} {out.name} with header {h2[0]}")
                                     build.depends.add(out)
@@ -605,7 +605,7 @@ class NinjaParser:
                                     # We need to add it so that the include path is correctly build
                                     i.addIncludedFile((f"FAKE{h2[0]}", h2[1]))
                             continue
-                        for bld in self.generatedFiles[h2[0]].outputs:
+                        for bld in self.generatedFiles[h2[0]][0].outputs:
                             includeDir = h2[1]
                             if bld.name == h2[0]:
                                 # It's a bit weird that we "self" include ourselve
@@ -641,6 +641,7 @@ class NinjaParser:
             build.inputs.extend(list(generatedOutputsNeeded))
 
     def _finalizeHeadersForGeneratedFiles(self, current_dir: str):
+        trees = []
         for t in self.all_outputs.values():
             build = t.producedby
             if not build:
@@ -653,20 +654,23 @@ class NinjaParser:
                     for f in files:
                         relative_file = f"{dirpath}/{f}".replace(f"{ret}/", "")
                         # store the filename to build association
-                        self.generatedFiles[relative_file] = build
-                        self.finiliazeHeadersForFile(t, f, dirpath, ret, False)
-                try:
-                    shutil.rmtree(ret)
-                except Exception as _:
-                    logging.warn(f"Couldn't remove {ret}")
-                    pass
+                        self.generatedFiles[relative_file] = (build, ret)
+                        self.finiliazeHeadersForFile(t, f, dirpath, ret, False, True)
+                trees.append(ret)
+        return trees
 
     def finalizeHeaders(self, current_dir: str):
         # We might want to iterate twice on the values,
         # the first time we might want to get the builds that are custom commands because they are
         # supposed to generate files that are used by other builds
-        self._finalizeHeadersForGeneratedFiles(current_dir)
+        trees = self._finalizeHeadersForGeneratedFiles(current_dir)
         self._finalizeHeadersForNonGeneratedFiles(current_dir)
+        for ret in trees:
+            try:
+                shutil.rmtree(ret)
+            except Exception as _:
+                logging.warn(f"Couldn't remove {ret}")
+                pass
 
     def setManuallyGeneratedTargets(self, manually_generated: Dict[str, str]):
         self.manually_generated = manually_generated
