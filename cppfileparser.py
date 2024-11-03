@@ -56,7 +56,11 @@ def _findCPPIncludeForFile(
 
     for d in includes_dirs:
         generated_dir = False
-        if d.startswith("/generated"):
+        if d == "/generated":
+            logging.info(f"Found generated {file} in the includes variable")
+            full_file_name = file
+            generated_dir = True
+        elif d.startswith("/generated"):
             full_file_name = f"{d.replace('/generated', '')}/{file}"
             generated_dir = True
         elif d.startswith("/"):
