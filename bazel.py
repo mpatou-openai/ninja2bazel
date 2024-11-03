@@ -279,7 +279,7 @@ class BazelTarget(BaseBazelTarget):
         ret.append(f'    name = "{self.targetName().replace(":", "")}",')
         deps_headers = list(self.getAllHeaders(deps_only=True))
         headers = []
-        data = []
+        data: List[str] = []
         for h in self.hdrs:
             if h not in deps_headers:
                 if (
@@ -289,9 +289,10 @@ class BazelTarget(BaseBazelTarget):
                 ):
                     headers.append(h)
                 else:
-                    data.append(h)
+                    # FIXME simplify this
+                    headers.append(h)
         sources = [f for f in self.srcs]
-        hm = {"srcs": sources, "hdrs": headers, "deps": self.deps, "data": data}
+        hm = {"srcs": sources, "hdrs": headers, "deps": self.deps}
 
         if self.type == "cc_binary":
             del hm["hdrs"]
