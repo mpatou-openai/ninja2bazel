@@ -53,6 +53,7 @@ def _findCPPIncludeForFile(
 ) -> Tuple[bool, CPPIncludes]:
     found = False
     ret = CPPIncludes(set(), set(), set(), set())
+    check = False
 
     for d in includes_dirs:
         generated_dir = False
@@ -73,6 +74,10 @@ def _findCPPIncludeForFile(
             # There might be something to do remove prefixes
             ret.neededGeneratedFiles.add((full_file_name, d))
             found = True
+            if not full_file_name.endswith(".pb.h"):
+                check  = True
+                full_file_name = f"{generatedFiles[full_file_name][1]}/{full_file_name}"
+            logging.debug(f"Found generated {file} in the includes variable")
             break
 
         if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
@@ -103,6 +108,11 @@ def _findCPPIncludeForFile(
         full_file_name = resolvePath(full_file_name)
         ret.foundHeaders.add((full_file_name, d))
 
+        found = True
+        check = True
+        break
+
+    if check:
         cppIncludes = findCPPIncludes(
             full_file_name,
             includes_dirs,
@@ -112,8 +122,6 @@ def _findCPPIncludeForFile(
             name,
         )
         ret += cppIncludes
-        found = True
-        break
     return found, ret
 
 
@@ -124,6 +132,7 @@ def findCPPIncludes(
     cc_imports: List[BazelCCImport],
     generatedFiles: Dict[str, Any],
     parent: Optional[str] = None,
+    generated: bool = False,
 ) -> CPPIncludes:
     key = f"{name} {includes_dirs}"
     ret = CPPIncludes(set(), set(), set(), set())
@@ -209,6 +218,8 @@ def findCPPIncludes(
 
             if file in generatedFiles:
                 logging.info(f"Found missing header {file} in the generated files")
+                (found, cppIncludes) = _findCPPIncludeForFile(file, includes_dirs, current_dir, name, cc_imports, compilerIncludes, generatedFiles)
+                ret += cppIncludes
                 found = True
 
         if not found:
