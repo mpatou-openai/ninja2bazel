@@ -426,17 +426,6 @@ class Build:
         if el.name.endswith(".h") or el.name.endswith(".hpp"):
             # Seems not needed anymore this ?
             assert False
-            # TODO I have the feeling that we could extrapolate the location of the header here
-            # FIXME Not clear if this is ever visted
-            logging.info(f"Handling generated file header {el.name}")
-            if isinstance(ctx.current, BazelTarget):
-                ctx.current.addHdr(
-                    cls._genExportedFile(el.shortName, ctx.current.location)
-                )
-            else:
-                logging.warn(
-                    f"{el} is a header file but {ctx.current} is not a BazelTarget that can have headers"
-                )
         elif el.name.endswith(".proto") and el.includes is None:
             logging.warn(f"{el.name} is a protobuf and includes is none")
         elif el.name.endswith(".proto") and el.includes is not None:
@@ -1031,23 +1020,6 @@ chmod a+x $@
                 # This should be almost useless now because generated includes are attached to the
                 # C/C++ file that requires them and the processing of it will be partially done in
                 # the HandleFileForBazel and while visiting the build
-                assert False
-                for j in list(i.includes) or []:
-                    includeFile = j[0]
-                    includeDirFull = j[1]
-                    generated = False
-                    if includeDirFull.startswith(workDir):
-                        includeDir = includeDirFull.replace(workDir, "")
-                        generated = True
-                    else:
-                        includeDir = includeDirFull.replace(ctx.rootdir, "")
-                    logging.info(
-                        f"Adding include {includeFile} from {includeDir} generated {generated} full dir {j[1]}"
-                    )
-                    ctx.current.addHdr(
-                        build._genExportedFile(includeFile, ctx.current.location),
-                        (includeDir, generated),
-                    )
 
             assert len(self.outputs) == 1
             if ".grpc.pb.cc.o" in self.outputs[0].name:
