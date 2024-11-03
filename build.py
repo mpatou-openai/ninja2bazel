@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 from bazel import (BaseBazelTarget, BazelBuild, BazelCCImport,
                    BazelCCProtoLibrary, BazelGenRuleTarget,
                    BazelGRPCCCProtoLibrary, BazelProtoLibrary, BazelTarget,
-                   ExportedFile, ShBinaryBazelTarget, getObject)
+                   ExportedFile, ShBinaryBazelTarget, getObject, BazelExternalDep)
 from visitor import VisitorContext
 
 VisitorType = Callable[["BuildTarget", "VisitorContext", bool], bool]
@@ -149,6 +149,9 @@ class BuildTarget:
 
     def addIncludedFile(self, file: Tuple[str, str]):
         self.includes.add(file)
+
+    def addDeps(self, dep: Union["BuildTarget", "BazelCCImport"]):
+        self.depends.append(dep)
 
     def setDeps(self, deps: List[Union["BuildTarget", "BazelCCImport"]]):
         self.depends = deps
@@ -462,6 +465,11 @@ class Build:
                 )
                 stripPrefix = d.replace(ctx.current.location + os.path.sep, "")
                 t.stripImportPrefix = stripPrefix
+            for dep in el.depends:
+                # strip the @ marker
+                target = dep.name[1:].split('/')[-1].replace(".proto", "_proto")
+                logging.info(f"Adding dep {target} to {t.name}")
+                t.addDep(BazelExternalDep(target, "@com_google_protobuf//"))
         else:
             if el.type == TargetType.external:
                 logging.info(f"Dealing with external dep {el.name} {ctx.current}")
@@ -589,44 +597,44 @@ class Build:
             # The following function will mess up the dest/current
             savedCurrent = ctx.current
             if grpc:
-                self._handleGRPCCCProtobuf(ctx, el, True)
+                self._handleGRPCCCProtobuf(ctx, el)
             else:
-                self._handleCCProtobuf(ctx, el, True)
+                self._handleCCProtobuf(ctx, el)
             ctx.current = savedCurrent
             ctx.next_current = savedCurrent
             # Maybe we still want to continue ... tbd
-            # return
-        if self.associatedBazelTarget is None:
-            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-            t = getObject(BazelProtoLibrary, f"{proto}_proto", location)
-            ctx.bazelbuild.bazelTargets.add(t)
-            self.setAssociatedBazelTarget(t)
+            return
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        t = getObject(BazelProtoLibrary, f"{proto}_proto", location)
+        ctx.bazelbuild.bazelTargets.add(t)
+        logging.info(f"Setting associated target {t.name} to {self}")
+        self.setAssociatedBazelTarget(t)
 
-            assert el.producedby is not None
+        assert el.producedby is not None
 
-            for e in el.producedby.inputs:
-                if e.name.endswith(".proto"):
-                    logging.info(
-                        f"Proto input for {ctx.rootdir} {el.name.replace(ctx.rootdir, '')}: {e.name.replace(ctx.rootdir, '')}"
-                    )
-                    path = e.name.replace(ctx.rootdir, "")
-                    t.addSrc(self._genExportedFile(path, location))
+        for e in el.producedby.inputs:
+            if e.name.endswith(".proto"):
+                logging.info(
+                    f"Proto input for {ctx.rootdir} {el.name.replace(ctx.rootdir, '')}: {e.name.replace(ctx.rootdir, '')}"
+                )
+                path = e.name.replace(ctx.rootdir, "")
+                t.addSrc(self._genExportedFile(path, location))
 
-            tmp: BaseBazelTarget = t
-        else:
-            tmp = self.associatedBazelTarget
+            for dep in e.depends:
+                # strip the @ marker
+                target = dep.name[1:].split('/')[-1].replace(".proto", "_proto")
+                logging.info(f"Adding dep {target} to {t.name}")
+                t.addDep(BazelExternalDep(target, "@com_google_protobuf//"))
+
+        tmp: BaseBazelTarget = t
         logging.info(
-            f"Handling protobuf {el.name} current={type(ctx.current)} adding {tmp.name}"
+            f"Handling protobuf {el.name} current={ctx.current.name} adding {tmp.name}"
         )
 
         if isinstance(ctx.current, BazelGRPCCCProtoLibrary):
-            logging.info(f"Before: for {ctx.current.name} {ctx.current.srcs}")
             ctx.current.addSrc(tmp)
-            logging.info(f"After: for {ctx.current.name} {ctx.current.srcs}")
         elif isinstance(ctx.current, BazelCCProtoLibrary):
-            logging.info(f"Before: for {ctx.current.name} {ctx.current.deps}")
             ctx.current.addDep(tmp)
-            logging.info(f"After: for {ctx.current.name} {ctx.current.deps}")
         ctx.current = tmp
 
     def canGenerateFinal(self) -> bool:
@@ -833,65 +841,53 @@ chmod a+x $@
         ctx.current = genTarget
 
     def _handleGRPCCCProtobuf(
-        self, ctx: BazelBuildVisitorContext, el: BuildTarget, skipCheck: bool = False
-    ):
+        self, ctx: BazelBuildVisitorContext, el: BuildTarget):
         assert ctx.current is not None
-        if self.associatedBazelTarget is None:
-            arr = el.name.split(os.path.sep)
-            filename = arr[-1]
-            regex = r"(.*)\.grpc\.pb\.(cc\.o|h)"
-            matches = re.match(regex, filename)
-            if matches is None:
-                logging.info(f"Filename is {filename}")
-            assert matches is not None
-            proto = matches.group(1)
+        # We can rely on self.associatedBazelTarget usually protobuf related target produces multiple files and multiple bazel targets
+        # Now that we cache the associated bazel targets there is limited risk to "recreate" the same target
+        arr = el.name.split(os.path.sep)
+        filename = arr[-1]
+        regex = r"(.*)\.grpc\.pb\.(cc\.o|h)"
+        matches = re.match(regex, filename)
+        if matches is None:
+            logging.info(f"Filename is {filename}")
+        assert matches is not None
+        proto = matches.group(1)
 
-            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
-            t: BaseBazelTarget = getObject(
-                BazelGRPCCCProtoLibrary, f"{proto}_cc_grpc", location
-            )
-            ctx.bazelbuild.bazelTargets.add(t)
-            if not skipCheck:
-                self.setAssociatedBazelTarget(t)
-            for tgt in ctx.bazelbuild.bazelTargets:
-                if tgt.name == f"{proto}_cc_proto":
-                    t.addDep(tgt)
-        else:
-            t = self.associatedBazelTarget
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        t: BaseBazelTarget = getObject(
+            BazelGRPCCCProtoLibrary, f"{proto}_cc_grpc", location
+        )
+        ctx.bazelbuild.bazelTargets.add(t)
+        for tgt in ctx.bazelbuild.bazelTargets:
+            if tgt.name == f"{proto}_cc_proto":
+                t.addDep(tgt)
         ctx.current.addDep(t)
         ctx.next_current = t
         ctx.current = t
 
     def _handleCCProtobuf(
-        self, ctx: BazelBuildVisitorContext, el: BuildTarget, skipCheck: bool = False
-    ):
+        self, ctx: BazelBuildVisitorContext, el: BuildTarget):
         assert ctx.current is not None
-        if self.associatedBazelTarget is None or skipCheck:
-            arr = el.name.split(os.path.sep)
-            filename = arr[-1]
-            regex = r"(.*)\.pb\.(cc\.o|h)"
-            matches = re.match(regex, filename)
-            assert matches is not None
-            proto = matches.group(1)
+        arr = el.name.split(os.path.sep)
+        filename = arr[-1]
+        regex = r"(.*)\.pb\.(cc\.o|h)"
+        matches = re.match(regex, filename)
+        assert matches is not None
+        proto = matches.group(1)
 
-            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
 
-            logging.info(f"Creating a proto cc library {proto}_cc_proto {location}")
-            t: BaseBazelTarget = getObject(
-                BazelCCProtoLibrary, f"{proto}_cc_proto", location
-            )
-            ctx.current.addDep(t)
-            ctx.bazelbuild.bazelTargets.add(t)
-            if not skipCheck:
-                # When we are asked to skip the check for pre-existing association we also don't create one
-                self.setAssociatedBazelTarget(t)
-            for tgt in ctx.bazelbuild.bazelTargets:
-                if tgt.name == f"{proto}_cc_grpc":
-                    assert isinstance(tgt, BaseBazelTarget)
-                    tgt.addDep(t)
-        else:
-            t = self.associatedBazelTarget
-            ctx.current.addDep(t)
+        logging.info(f"Creating a proto cc library {proto}_cc_proto {location}")
+        t: BaseBazelTarget = getObject(
+            BazelCCProtoLibrary, f"{proto}_cc_proto", location
+        )
+        ctx.current.addDep(t)
+        ctx.bazelbuild.bazelTargets.add(t)
+        for tgt in ctx.bazelbuild.bazelTargets:
+            if tgt.name == f"{proto}_cc_grpc":
+                assert isinstance(tgt, BaseBazelTarget)
+                tgt.addDep(t)
         ctx.next_current = t
         ctx.current = t
 

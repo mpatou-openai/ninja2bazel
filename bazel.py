@@ -450,6 +450,7 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
         super().__init__("cc_grpc_library", name, location)
         self.deps: Set[BaseBazelTarget] = set()
         self.srcs: Set[BaseBazelTarget] = set()
+        self.deps.add(BazelExternalDep("grpc++", "@com_github_grpc_grpc//"))
 
     def addDep(self, dep: Union[BaseBazelTarget, BazelCCImport]):
         assert isinstance(dep, BazelCCProtoLibrary)
@@ -480,9 +481,12 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
             if len(v) > 0:
                 ret.append(f"    {k} = [")
                 for d in sorted(v):
-                    pathPrefix = (
-                        f"//{d.location}" if d.location != self.location else ""
-                    )
+                    if d.location.startswith("@"):
+                        pathPrefix = d.location
+                    else:
+                        pathPrefix = (
+                            f"//{d.location}" if d.location != self.location else ""
+                        )
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
         ret.append(")")
@@ -533,14 +537,29 @@ class BazelProtoLibrary(BaseBazelTarget):
             if len(v) > 0:
                 ret.append(f"    {k} = [")
                 for d in sorted(v):
-                    pathPrefix = (
-                        f"//{d.location}" if d.location != self.location else ""
-                    )
+                    if d.location.startswith("@"):
+                        pathPrefix = d.location
+                    else:
+                        pathPrefix = (
+                            f"//{d.location}" if d.location != self.location else ""
+                        )
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
         ret.append(")")
 
         return ret
+    
+@total_ordering
+class BazelExternalDep(BaseBazelTarget):
+    def __init__(self, name: str, location: str):
+        super().__init__("external", name, location)
+        self.deps: Set[BaseBazelTarget] = set()
+
+    def asBazel(self):
+        return []
+    
+    def targetName(self):
+        return f":{self.name}"
 
 
 @total_ordering
