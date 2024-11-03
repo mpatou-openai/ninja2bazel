@@ -594,6 +594,10 @@ class NinjaParser:
                             for out in self.generatedFiles[h2[0]].outputs:
                                 if out.name == h2[0]:
                                     build.depends.add(out)
+                                    # Add the header with a fake name to know where it comes from
+                                    # it *should* be skipped because it's a generated file
+                                    # We need to add it so that the include path is correctly build
+                                    i.addIncludedFile((f"FAKE{h2[0]}", h2[1]))
                             continue
                         for bld in self.generatedFiles[h2[0]].outputs:
                             includeDir = h2[1]
