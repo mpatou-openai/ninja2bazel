@@ -615,10 +615,16 @@ class NinjaParser:
                     protos = findProtoIncludes(i.name, includes_dirs)
                     includesFiles = []
                     for p in protos:
-                        f = self.getShortName(p[0], workDir)
-                        d = self.getShortName(p[1], workDir)
-                        f = f.replace(d + os.path.sep, "")
-                        includesFiles.append((f, d))
+                        if p[1] == "@":
+                            name=f"@{p[0]}"
+                            logging.info(f"Adding external dependency {name}")
+                            dep = BuildTarget(name, name).markAsExternal()
+                            i.addDeps(dep)
+                        else:
+                            f = self.getShortName(p[0], workDir)
+                            d = self.getShortName(p[1], workDir)
+                            f = f.replace(d + os.path.sep, "")
+                            includesFiles.append((f, d))
                     i.setIncludedFiles(includesFiles)
             # TODO revisit if we need to extend the inputs o: the dependencies of the build
             # dependencies might have a side effect that is not desirable for generated files

@@ -24,6 +24,10 @@ def findProtoIncludes(name: str, includeDirs: Set[str]) -> List[Tuple[str, str]]
         match = re.match(r'import "(.*)";', line)
         if match is None:
             continue
+        if match.group(1).startswith("google/"):
+            ret.append((match.group(1), "@"))
+            continue
+
         for d in includeDirs:
             filename = f"{d}{os.path.sep}{match.group(1)}"
             if os.path.exists(filename):
