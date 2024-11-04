@@ -655,7 +655,7 @@ class NinjaParser:
                         relative_file = f"{dirpath}/{f}".replace(f"{ret}/", "")
                         # store the filename to build association
                         self.generatedFiles[relative_file] = (build, ret)
-                        self.finiliazeHeadersForFile(t, f, dirpath, ret, False, True)
+                        self.finiliazeHeadersForFile(t, f, dirpath, ret, False)
                 trees.append(ret)
         return trees
 
