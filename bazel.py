@@ -61,7 +61,10 @@ class BazelCCImport:
         return []
 
     def replaceFirst(self, txt: str) -> str:
-        return f"_{txt[1:]}"
+        if len(txt) > 0:
+            return f"_{txt[1:]}"
+        else:
+            return txt
 
     def asBazel(self) -> List[str]:
         ret = []
@@ -78,7 +81,9 @@ class BazelCCImport:
                 ret.append(
                     f'    shared_library = "{self.replaceFirst(self.sharedLibrary)}",'
                 )
-        ret.append(f"    hdrs = {[self.replaceFirst(h) for h in self.hdrs]},")
+        ret.append(
+            f"    hdrs = {[self.replaceFirst(h) for h in self.hdrs if len(h) > 0]},"
+        )
         if self.staticLibrary is not None:
             ret.append(
                 f'    static_library = "{self.replaceFirst(self.staticLibrary)}",'
@@ -551,7 +556,8 @@ class BazelProtoLibrary(BaseBazelTarget):
         ret.append(")")
 
         return ret
-    
+
+
 @total_ordering
 class BazelExternalDep(BaseBazelTarget):
     def __init__(self, name: str, location: str):
@@ -560,7 +566,7 @@ class BazelExternalDep(BaseBazelTarget):
 
     def asBazel(self):
         return []
-    
+
     def targetName(self):
         return f":{self.name}"
 
