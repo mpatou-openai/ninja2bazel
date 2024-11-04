@@ -106,7 +106,8 @@ class BazelBuild:
             prefix = self.prefix[:-1]
         else:
             prefix = self.prefix
-        tmp = {f'load("//{prefix}:helpers.bzl", "add_bazel_out_prefix")'}
+        helper_include = {f'load("//{prefix}:helpers.bzl", "add_bazel_out_prefix")'}
+
         content: Dict[str, List[str]] = {}
         lastLocation = None
         for t in sorted(self.bazelTargets):
@@ -120,10 +121,11 @@ class BazelBuild:
                 body.append(f"# Location {location}")
                 body.extend(t.asBazel())
                 content[location] = body
-                if t.location.startswith("@"):
-                    top = topContent.get(location, set())
-                else:
-                    top = topContent.get(location, tmp.copy())
+                top = topContent.get(location)
+                if not top:
+                    top = set()
+                    if not t.location.startswith("@"):
+                        top.update(helper_include)
                 top.add(t.getGlobalImport())
                 topContent[location] = top
                 lastLocation = location
@@ -133,12 +135,12 @@ class BazelBuild:
             if lastLocation is not None:
                 content[lastLocation].append("")
         for k, v in topContent.items():
-            top = set(filter(lambda x: x != "", v))
-            if len(top) > 0:
+            topStanza = list(filter(lambda x: x != "", v))
+            if len(topStanza) > 0:
                 # Force empty line
-                top.add("")
-            logging.info(f"Top content is {top}")
-            ret[k] = "\n".join(top)
+                topStanza.append("")
+            logging.info(f"Top content is {topStanza}")
+            ret[k] = "\n".join(topStanza)
         for k, v2 in content.items():
             ret[k] += "\n".join(v2)
         return ret
