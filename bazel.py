@@ -302,8 +302,7 @@ class BazelTarget(BaseBazelTarget):
                     else:
                         headers.append(h)
         sources = [f for f in self.srcs]
-        hm = {"srcs": sources, "hdrs": headers, "deps": self.deps}
-
+        hm = {"srcs": sources, "hdrs": headers, "deps": self.deps, "data": data}
         if self.type == "cc_binary":
             del hm["hdrs"]
             sources.extend(headers)
@@ -335,6 +334,12 @@ class BazelTarget(BaseBazelTarget):
             else:
                 dirName = f'"{dir[0]}"'
             copts.add(f'"-I{{}}".format({dirName})')
+        # FIXME for the moment move defines to copts so that they are not propagated to
+        # the targets that depends on it
+        for define in self.defines:
+            define = define.replace('"', '')
+            copts.add(f'"-D{define}"')
+        self.defines = set()
         textOptions: Dict[str, List[str]] = {
             "copts": list(copts),
             "defines": list(self.defines),
