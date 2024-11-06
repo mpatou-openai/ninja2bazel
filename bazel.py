@@ -296,11 +296,10 @@ class BazelTarget(BaseBazelTarget):
                 ):
                     headers.append(h)
                 else:
-                    if self.type == "cc_binary":
-                        # Seems that you can't have ".include" files in cc_binary
+                    if self.type != "cc_library":
+                        logging.warn(f"There is some kind of header that didn't match .h/.hpp/.tcc adding to data but it's likely to not work well")
                         data.append(h)
-                    else:
-                        headers.append(h)
+
         sources = [f for f in self.srcs]
         hm = {"srcs": sources, "hdrs": headers, "deps": self.deps, "data": data}
         if self.type == "cc_binary":
