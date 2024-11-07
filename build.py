@@ -394,7 +394,7 @@ class Build:
         if len(el.depends) > 0:
             logging.info(f"Visiting deps for {el.name}")
             for dep in el.depends:
-                logging.info(f"Visiting dep {dep}")
+                logging.debug(f"Visiting dep {dep}")
                 if ctx.current is not None:
                     if isinstance(dep, BazelCCImport):
                         ctx.current.addDep(dep)
