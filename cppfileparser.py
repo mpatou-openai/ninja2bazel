@@ -80,7 +80,24 @@ def _findCPPIncludeForFile(
             break
 
         if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
-            continue
+            # Check if the file is part of the compiler include as we don't want to recurse for headers
+            # there too
+            for cdir in compilerIncludes:
+                full_file_name2 = f"{cdir}/{file}"
+                if not os.path.exists(full_file_name2) or os.path.isdir(full_file_name2):
+                    continue
+                logging.info(f"Found {file} in the compiler include: {cdir}")
+                for imp in cc_imports:
+                    if full_file_name2 in imp.hdrs:
+                        logging.info(f"Found {full_file_name} in {imp}")
+                        ret.neededImports.add(imp)
+                        break
+                found = True
+                break
+            if not found:
+                continue
+            else:
+                break
 
         logging.debug(f"Found {file} in the includes variable")
         # Check if the file is part of the cc_imports as we don't want to recurse for headers there
@@ -91,15 +108,6 @@ def _findCPPIncludeForFile(
                 found = True
                 break
 
-        # Check if the file is part of the compiler include as we don't want to recurse for headers
-        # there too
-        for cdir in compilerIncludes:
-            full_file_name2 = f"{cdir}/{file}"
-            if not os.path.exists(full_file_name2) or os.path.isdir(full_file_name2):
-                continue
-            logging.info(f"Found {file} in the compiler include: {cdir}")
-            found = True
-            break
 
         if found:
             break
