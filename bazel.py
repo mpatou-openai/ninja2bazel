@@ -2,6 +2,7 @@ import logging
 import os
 import re
 from functools import total_ordering
+from functools import cmp_to_key
 from typing import Any, Dict, List, Optional, Set, Type, TypeVar, Union
 
 # Define a type variable that can be any type
@@ -317,7 +318,28 @@ class BazelTarget(BaseBazelTarget):
         for k, v in hm.items():
             if len(v) > 0:
                 ret.append(f"    {k} = [")
-                for d in sorted(v):
+                # Let's have a different sorting function for deps
+                if k == "deps":
+                    def compare_deps(a, b):
+                        ret = 0
+                        if a.location[0] == b.location[0]:
+                            if a == b:
+                                ret = 0
+                            elif a > b:
+                                ret = 1
+                            else:
+                                ret = -1
+                        elif a.location[0] == '@':
+                            ret = -1
+                        else:
+                             ret= 1
+                        logging.info(f"Comparing {a.location}{a.name} with {b.location}{b.name} = {ret}")
+                        return ret
+
+                    sort_function = cmp_to_key(compare_deps)
+                else:
+                    sort_function = lambda x: x
+                for d in sorted(v, key=sort_function):
                     pathPrefix = _getPrefix(d)
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
