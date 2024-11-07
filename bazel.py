@@ -16,6 +16,7 @@ class BazelCCImport:
         self.name = name
         self.system_provided = 0
         self.hdrs: list[str] = []
+        self.deps: set[str] = set()
         self.staticLibrary: Optional[str] = None
         self.sharedLibrary: Optional[str] = None
         self.location = ""
@@ -89,6 +90,11 @@ class BazelCCImport:
             ret.append(
                 f'    static_library = "{self.replaceFirst(self.staticLibrary)}",'
             )
+        if len(self.deps) > 0:
+            ret.append("    deps = [")
+            for d in sorted(self.deps):
+                ret.append(f'        ":{d.strip()}",')
+            ret.append("    ],")
         ret.append('    visibility = ["//visibility:public"],')
         ret.append(")")
 

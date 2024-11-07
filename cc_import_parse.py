@@ -57,6 +57,26 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
             if line.startswith("static_libs = "):
                 assert current is not None
                 current.setStaticLibrarys(cleanupVar(val))
+            if line.startswith("deps = "):
+                assert current is not None
+                regex = r"([()\[\]])"
+                openParentesis = 0
+                openBrackets = 0
+                found = re.findall(regex, line)
+                for c in found:
+                    if c == "[":
+                        openBrackets += 1
+                    if c == "]":
+                        openBrackets -= 1
+                    if c == "(":
+                        openParentesis += 1
+                    if c == ")":
+                        openParentesis -= 1
+                inflightAttr = "deps"
+                inflightVals = line.replace("deps = ", "").strip()
+                inflightComplete = False
+                if openParentesis == 0 or openBrackets == 0:
+                    inflightComplete = True
             if line.startswith("hdrs = "):
                 assert current is not None
                 regex = r"([()\[\]])"
@@ -97,8 +117,12 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
                         val = val[1:]
                     if val[-1] == "]":
                         val = val[:-1]
+                    val = val.strip()
                     # replace quotes ...
-                    vals.append(val.replace('"', "").replace("'", ""))
+                    val = val.replace('"', "").replace("'", "")
+                    if len(val) > 0 and val[0] == ":":
+                        val = val[1:]
+                    vals.append(val)
             setattr(current, inflightAttr, vals)
 
     return imports
