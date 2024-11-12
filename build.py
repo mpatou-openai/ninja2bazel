@@ -915,14 +915,14 @@ chmod a+x $@
                 staticLibTarget = getObject(
                     BazelTarget,
                     "cc_library",
-                    "inner_" + el.shortName.replace("/", "_"),
+                    el.shortName.replace("/", "_"),
                     location,
                 )
                 staticLibTarget.addPrefixIfRequired = False
                 t = getObject(
                     BazelTarget,
                     "cc_shared_library",
-                    el.shortName.replace("/", "_"),
+                    "shared_"+el.shortName.replace("/", "_"),
                     location,
                 )
 
@@ -930,6 +930,8 @@ chmod a+x $@
                 t.addDep(staticLibTarget)
                 ctx.bazelbuild.bazelTargets.add(staticLibTarget)
                 nextCurrent = staticLibTarget
+                # Bazel wants only libraries not shared as dependencies
+                t = staticLibTarget
             else:
                 t = getObject(BazelTarget, "cc_binary", el.name, location)
                 nextCurrent = t
@@ -942,10 +944,12 @@ chmod a+x $@
             if t.type == "cc_shared_library":
                 # First (and only ?) dep of a cc_shared_library should be a cc_library (so
                 # a BaseBazelTarget
-                tmp2 = t.deps.pop()
+                tmp2 = list(t.deps)[0]
                 assert isinstance(tmp2, BazelTarget)
                 tmp = tmp2
             nextCurrent = tmp
+            # Bazel wants only libraries not shared as dependencies
+            t = tmp
 
         if ctx.current is not None:
             ctx.current.addDep(t)
