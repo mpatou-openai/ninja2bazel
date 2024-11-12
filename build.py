@@ -411,6 +411,9 @@ class Build:
                     elif isinstance(dep, Build):
                         logging.info(f"Dep {dep} is a Build")
                     else:
+                        if dep.name.startswith("@google/protobuf"):
+                            # Protobuf already handled
+                            continue
                         logging.warn(f"Visiting {dep} but don't know what to do")
 
         if (
