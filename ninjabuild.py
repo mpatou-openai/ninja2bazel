@@ -94,27 +94,23 @@ class NinjaParser:
         self.cacheHeaders: Dict[str, CPPIncludes] = {}
         self.generatedFilesLogged: Set[Tuple[str, str]] = set()
 
-    def getShortName(self, name, workDir=None):
+    def getShortName(self, name, workDir=None, generated=False) -> Tuple[str, Optional[str]]:
         if name.startswith(self.codeRootDir):
-            return name[len(self.codeRootDir) :]
-        if workDir is not None:
-            s = workDir
-            if not s.endswith(os.path.sep):
-                s += os.path.sep
-        else:
-            s = self.vars[self.currentContext].get("cmake_ninja_workdir", "")
+            return (name[len(self.codeRootDir) :], None)
+        if workDir is None:
+            workDir = self.vars[self.currentContext].get("cmake_ninja_workdir", "")
+        if not workDir.endswith(os.path.sep):
+            workDir += os.path.sep
 
-        # TODO find a way to for generated files to figure out the best prefix
-        if len(s) > 0 and name.startswith(s):
-            offset = len(s)
-            if not s.endswith(os.path.sep):
-                offset += 1
-            ret = f"{self.initialDirectory}{name[offset:]}"
-            return ret
+        # if the name starts with workDir strip it
+        if len(workDir) > 0 and name.startswith(workDir):
+            offset = len(workDir)
+            return (name[offset:], self.initialDirectory)
+
+        # The name is relative (ie. for generated files)
         if self.initialDirectory != "" and name[0] != os.path.sep:
-            ret = f"{self.initialDirectory}{name}"
-            return ret
-        return name
+            return (name, self.initialDirectory)
+        return (name, None)
 
     def setDirectoryPrefix(self, initialDirectoryPrefix: str):
         self.initialDirectory = initialDirectoryPrefix
@@ -201,10 +197,11 @@ class NinjaParser:
             # logging.info(f"Adding {val} as an output, resolved as {tmp}")
             val = tmp
 
+            shortName = self.getShortName(val)
             outputs.append(
                 BuildTarget(
                     val,
-                    self.getShortName(val),
+                    shortName,
                     implicit,
                 )
             )
@@ -526,7 +523,7 @@ class NinjaParser:
                         h[0].replace(tempTopFolder, workDir), workDir
                     )
                     includeDir = h[1].replace(tempTopFolder, workDir)
-                    allIncludes.append((name, includeDir))
+                    allIncludes.append((name[0], includeDir))
                 # We make the decision to not deal with generated files that are needed by other
                 # generated files
                 for h in list(cppIncludes.neededGeneratedFiles):
@@ -582,7 +579,7 @@ class NinjaParser:
                                     self.missingFiles[h] = []
                                 self.missingFiles[h].append(build)
                     allIncludes = [
-                        (self.getShortName(h[0], workDir), h[1])
+                        (self.getShortName(h[0], workDir)[0], h[1])
                         for h in list(cppIncludes.foundHeaders)
                     ]
                     i.setIncludedFiles(allIncludes)
@@ -628,11 +625,11 @@ class NinjaParser:
                         if p[1] == "@":
                             name = f"@{p[0]}"
                             logging.info(f"Adding external dependency {name}")
-                            dep = BuildTarget(name, name).markAsExternal()
+                            dep = BuildTarget(name, (name, None)).markAsExternal()
                             i.addDeps(dep)
                         else:
-                            f = self.getShortName(p[0], workDir)
-                            d = self.getShortName(p[1], workDir)
+                            (f, _) = self.getShortName(p[0], workDir)
+                            (d, _) = self.getShortName(p[1], workDir)
                             f = f.replace(d + os.path.sep, "")
                             includesFiles.append((f, d))
                     i.setIncludedFiles(includesFiles)

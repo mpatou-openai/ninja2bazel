@@ -66,7 +66,10 @@ class BuildFileGroupingStrategy:
     def getBuildTarget(self, filename: str, parentTarget: str, keepPrefix=False) -> str:
         raise NotImplementedError
 
-    def getBuildFilenamePath(self, filename: str) -> str:
+    def getBuildFilenamePath(self, element: "BuildTarget") -> str:
+        raise NotImplementedError
+
+    def getBuildFilenamePathFromFilename(self, filename: str) -> str:
         raise NotImplementedError
 
 
@@ -77,7 +80,13 @@ class TopLevelGroupingStrategy(BuildFileGroupingStrategy):
     def strategyName(self):
         return "TopLevelGroupingStrategy"
 
-    def getBuildFilenamePath(self, filename: str) -> str:
+    def getBuildFilenamePath(self, element: "BuildTarget") -> str:
+        if element.location is not None:
+            return element.location.split('/')[0]
+        
+        return self.getBuildFilenamePathFromFilename(element.shortName)
+
+    def getBuildFilenamePathFromFilename(self, filename: str) -> str:
         pathElements = filename.split(os.path.sep)
         if len(pathElements) <= 1:
             return ""
@@ -111,11 +120,11 @@ class BuildTarget:
     def __init__(
         self,
         name: str,
-        shortName: str,
+        shortName: Tuple[str, Optional[str]],
         implicit: bool = False,
     ):
         self.name = name
-        self.shortName = shortName
+        (self.shortName,self.location) = shortName
         self.implicit = implicit
         self.producedby: Optional["Build"] = None
         self.usedbybuilds: List["Build"] = []
@@ -362,7 +371,7 @@ class Build:
         if not ef:
             keepPrefix = False
             if fileLocation is None:
-                fileLocation = BuildFileGroupingStrategy().getBuildFilenamePath(
+                fileLocation = BuildFileGroupingStrategy().getBuildFilenamePathFromFilename(
                     filename
                 )
             else:
@@ -593,7 +602,7 @@ class Build:
             ctx.next_current = savedCurrent
             # Maybe we still want to continue ... tbd
             return
-        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         t = getObject(BazelProtoLibrary, f"{proto}_proto", location)
         ctx.bazelbuild.bazelTargets.add(t)
         self.setAssociatedBazelTarget(t)
@@ -640,7 +649,7 @@ class Build:
         if self.associatedBazelTarget is None:
             name = el.shortName.replace("/", "_").replace(".", "_")
 
-            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+            location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
             genTarget = getObject(BazelGenRuleTarget, f"{name}_command", location)
 
             allInputs: List[str] = []
@@ -683,7 +692,7 @@ class Build:
                     genTarget.addOut(name)
 
             logging.info(
-                f"Current build path for target: {TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)}"
+                f"Current build path for target: {TopLevelGroupingStrategy().getBuildFilenamePath(el)}"
             )
             # We don't need to handle the replacement of prefix and whatnot bazel seems to be able
             # to handle it
@@ -786,7 +795,8 @@ chmod a+x $@
             assert isinstance(tmp, BazelGenRuleTarget)
             genTarget = tmp
 
-        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName) + "/"
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el) + "/"
+        logging.info(f"Looking for generated files for {el.shortName} in {location}")
         outs = genTarget.getOutputs(el.shortName, location)
 
         # Generated files are not added (anymore) directly to the bazelTarget when we finalize the
@@ -838,7 +848,7 @@ chmod a+x $@
         assert matches is not None
         proto = matches.group(1)
 
-        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         t: BaseBazelTarget = getObject(
             BazelGRPCCCProtoLibrary, f"{proto}_cc_grpc", location
         )
@@ -859,7 +869,7 @@ chmod a+x $@
         assert matches is not None
         proto = matches.group(1)
 
-        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
 
         t: BaseBazelTarget = getObject(
             BazelCCProtoLibrary, f"{proto}_cc_proto", location
@@ -876,7 +886,7 @@ chmod a+x $@
     def _handleCPPLinkExecutableCommand(
         self, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
     ):
-        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         if self.associatedBazelTarget is None:
             t = getObject(BazelTarget, "cc_binary", el.name, location)
             nextCurrent = t
@@ -896,7 +906,7 @@ chmod a+x $@
     def _handleCPPLinkCommand(
         self, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
     ):
-        location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+        location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         if self.associatedBazelTarget is None:
             if self.vars.get("SONAME") is not None:
                 staticLibTarget = getObject(
@@ -1029,7 +1039,7 @@ chmod a+x $@
             return
         if self.isStaticArchiveCommand(cmd):
             assert len(self.outputs) == 1
-            location = TopLevelGroupingStrategy().getBuildFilenamePath(el.shortName)
+            location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
             t = getObject(BazelTarget, "cc_library", el.name, location)
             if ctx.current is not None:
                 ctx.current.addDep(t)
