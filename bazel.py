@@ -9,6 +9,34 @@ from typing import Any, Dict, List, Optional, Set, Type, TypeVar, Union
 T = TypeVar("T")
 
 IncludeDir = tuple[str, bool]
+def findCommonPaths(paths: List[str]) -> List[str]:
+    split_paths = [p.split(os.path.sep)[:-1] for p in paths]
+
+    joined = zip(*split_paths)
+    # now joined a is a list of list, each element of the first list is a list of the directory for that level
+    # if at a given level all the paths are the same then we can add it to the common path
+    new_joined: List[List[str]] = []
+    for e in joined:
+        # dedup the entries
+        new_joined.append(list(set(e)))
+
+    ret = []
+    common  = []
+    for e2 in new_joined:
+        if len(e2) == 1:
+            common.append(e2[0])
+        else:
+            for el in e2:
+                ret.append("/".join([*common, el]))
+            break
+
+    if len(ret) == 0:
+        ret.append("/".join(common))
+
+    return ret
+
+def globifyPath(path: str) -> str:
+    return f"{path}/**/*.h"
 
 
 class BazelCCImport:
@@ -83,8 +111,16 @@ class BazelCCImport:
                 ret.append(
                     f'    shared_library = "{self.replaceFirst(self.sharedLibrary)}",'
                 )
+        if len(self.hdrs) > 1:
+            common = sorted(findCommonPaths(self.hdrs))
+            globs =[f'"_{globifyPath(c)[1:]}"' for c in common]
+            val = f' glob([{",".join(globs)}])'
+        elif len(self.hdrs) == 1 and len(self.hdrs[0]) > 0:
+            val = f'["_{self.hdrs[0][1:]}"]'
+        else:
+            val = '[]'
         ret.append(
-            f"    hdrs = {[self.replaceFirst(h) for h in self.hdrs if len(h) > 0]},"
+            f"    hdrs = {val},"
         )
         if self.staticLibrary is not None:
             ret.append(
