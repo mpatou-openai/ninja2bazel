@@ -149,6 +149,9 @@ class BazelBuild:
             logging.info(f"Top content is {topStanza}")
             ret[k] = "\n".join(topStanza)
         for k, v2 in content.items():
+            # Add some scaffolding for common options that could be easily tweaked
+            for c in ["copts", "defines", "linkopts"]:
+                ret[k] += f"common_{c}= []\n"
             ret[k] += "\n".join(v2)
         return ret
 
@@ -367,16 +370,23 @@ class BazelTarget(BaseBazelTarget):
             define = define.replace('"', '')
             copts.add(f'"-D{define}"')
         self.defines = set()
+        if self.type in ("cc_library", "cc_binary", "cc_test"):
+            linkopts = ["keep"]
+        else:
+            linkopts = []
         textOptions: Dict[str, List[str]] = {
             "copts": list(copts),
             "defines": list(self.defines),
+            "linkopts": linkopts,
         }
         for k, v2 in textOptions.items():
             if len(v2) > 0:
+                if v2[0] == "keep":
+                    v2 = []
                 ret.append(f"    {k} = [")
                 for to in sorted(v2):
                     ret.append(f"        {to},")
-                ret.append("    ],")
+                ret.append(f"    ] + common_{k},")
         ret.append(")")
 
         return ret
