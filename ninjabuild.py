@@ -535,10 +535,13 @@ class NinjaParser:
                 )
                 allIncludes = []
                 for h in list(cppIncludes.foundHeaders):
+                    # It's still possible that the header was added to foundheader with a temporary folder
+                    # It happens if header A that is also from the same temporary folder includes header B
+                    # from the same folder
                     name = self.getShortName(
-                        h[0].replace(tempTopFolder, workDir), workDir
+                        h[0].replace(tempTopFolder, workDir).replace("/generated", workDir), workDir
                     )
-                    includeDir = h[1].replace(tempTopFolder, workDir)
+                    includeDir = h[1].replace(tempTopFolder, workDir).replace("/generated", workDir)
                     allIncludes.append((name[0], includeDir))
                 # We make the decision to not deal with generated files that are needed by other
                 # generated files
@@ -594,10 +597,13 @@ class NinjaParser:
                                 if h not in self.missingFiles:
                                     self.missingFiles[h] = []
                                 self.missingFiles[h].append(build)
-                    allIncludes = [
-                        (self.getShortName(h[0], workDir)[0], h[1])
-                        for h in list(cppIncludes.foundHeaders)
-                    ]
+                    allIncludes = []
+                    for h2 in list(cppIncludes.foundHeaders):
+                        name = self.getShortName(
+                            h2[0].replace("/generated", workDir), workDir
+                        )
+                        includeDir = h2[1].replace("/generated", workDir)
+                        allIncludes.append((name[0], includeDir))
                     i.setIncludedFiles(allIncludes)
                     i.setDeps(list(cppIncludes.neededImports))
                     # Add the builds that produce generated files to the current build
