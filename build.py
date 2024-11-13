@@ -394,7 +394,7 @@ class Build:
         el: "BuildTarget",
         ctx: BazelBuildVisitorContext,
     ):
-        if el.type == TargetType.external and el.opaque is None:
+        if el.type == TargetType.external and el.opaque is None and not el.name.endswith("/protoc"):
             logging.info(
                 f"Dealing with external dep {el.name} that doesn't have an opaque"
             )
@@ -473,7 +473,7 @@ class Build:
                 t.addDep(BazelExternalDep(target, "@com_google_protobuf//"))
         else:
             if el.type == TargetType.external:
-                logging.info(f"Dealing with external dep {el.name} {ctx.current}")
+                logging.debug(f"Dealing with external dep {el.name}")
                 return
             # Not produced aka it's a file
             # we have to parse the file and see if there is any includes
@@ -807,12 +807,12 @@ chmod a+x $@
         # headers)
         for t in outs:
             if ctx.current is not None:
-                logging.info(
+                logging.debug(
                     f"Looking for generated file {t} in {ctx.current.neededGeneratedFiles}"
                 )
                 # ignoretype
                 if t.name.endswith(".h") and t in ctx.current.neededGeneratedFiles:
-                    logging.info(f"Found {t} in {ctx.current.neededGeneratedFiles}")
+                    logging.debug(f"Found {t} in {ctx.current.neededGeneratedFiles}")
                     # Figure out if we need some strip_include_prefix by matching the file
                     # with the different -I flags from the command line
                     assert isinstance(ctx.current, BazelTarget)
@@ -823,7 +823,6 @@ chmod a+x $@
                         logging.error(
                             f"There is a problem {t} has more than one include directory and we don't know how to handle that properly (yet), will dump all the directories and hope it will work ..."
                         )
-                    logging.info(el.includes)
                     for inc in el.includes:
                         logging.info(f"Adding generated header {t}, {inc[1]}")
                         ctx.current.addHdr(t, (inc[1], True))
@@ -1021,14 +1020,10 @@ chmod a+x $@
                 if i.is_a_file:
                     continue
                 if i.producedby is not None:
-                    logging.info(
+                    logging.debug(
                         f"Skipping produced {i} to find includes, it should be dealt by its build"
                     )
                     continue
-                logging.info(f"Iterating over {i}")
-                # This should be almost useless now because generated includes are attached to the
-                # C/C++ file that requires them and the processing of it will be partially done in
-                # the HandleFileForBazel and while visiting the build
 
             assert len(self.outputs) == 1
             if ".grpc.pb.cc.o" in self.outputs[0].name:

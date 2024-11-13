@@ -643,9 +643,9 @@ class NinjaParser:
                     includesFiles = []
                     for p in protos:
                         if p[1] == "@":
-                            name = f"@{p[0]}"
-                            logging.info(f"Adding external dependency {name}")
-                            dep = BuildTarget(name, (name, None)).markAsExternal()
+                            tgtname = f"@{p[0]}"
+                            logging.debug(f"Adding external dependency {tgtname}")
+                            dep = BuildTarget(tgtname, (tgtname, None)).markAsExternal()
                             i.addDeps(dep)
                         else:
                             (f, _) = self.getShortName(p[0], workDir)

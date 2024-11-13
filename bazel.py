@@ -600,7 +600,6 @@ class BazelProtoLibrary(BaseBazelTarget):
         return 'load("@rules_proto//proto:defs.bzl", "proto_library")'
 
     def addSrc(self, target: BaseBazelTarget):
-        logging.info("addSrc called for proto_library")
         self.srcs.add(target)
 
     def addDep(self, target: Union[BaseBazelTarget, BazelCCImport]):
@@ -748,7 +747,7 @@ def getObject(cls: Type[T], *kargs) -> T:
     key = f"{cls}" + " ".join(kargs)
     obj = cache.get(key)
     if obj:
-        logging.info(f"Cache hit for {key} {type(obj)}")
+        logging.debug(f"Cache hit for {key} {type(obj)}")
         assert isinstance(obj, cls)
         return obj
     obj = cls(*kargs)  # type: ignore
