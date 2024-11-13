@@ -56,19 +56,19 @@ def _findCPPIncludeForFile(
     check = False
 
     for d in includes_dirs:
-        generated_dir = False
+        use_generated_dir = False
         if d == "/generated":
             full_file_name = file
-            generated_dir = True
+            use_generated_dir = True
         elif d.startswith("/generated"):
             full_file_name = f"{d.replace('/generated', '')}/{file}"
-            generated_dir = True
+            use_generated_dir = True
         elif d.startswith("/"):
             full_file_name = f"{d}/{file}"
         else:
             full_file_name = f"{current_dir}/{d}/{file}"
 
-        if generated_dir and full_file_name in generatedFiles:
+        if use_generated_dir and full_file_name in generatedFiles:
             # The search header is a generated one that whose path match the includes
             # There might be something to do remove prefixes
             ret.neededGeneratedFiles.add((full_file_name, d))
@@ -76,7 +76,8 @@ def _findCPPIncludeForFile(
             if not full_file_name.endswith(".pb.h"):
                 check  = True
                 generatedFileFullName = full_file_name
-                full_file_name = f"{generatedFiles[full_file_name][1]}/{full_file_name}"
+                tempDir=generatedFiles[full_file_name][1]
+                full_file_name = f"{tempDir}/{full_file_name}"
             logging.debug(f"Found generated {file} in the includes variable")
             break
 
@@ -114,7 +115,7 @@ def _findCPPIncludeForFile(
             break
 
         full_file_name = resolvePath(full_file_name)
-        if not generated_dir:
+        if not use_generated_dir:
             # If generated dir is True it means that the header was found using a generated dir include 
             # we don't want to add it as is to the list of headers otherwise we will have a "/tmp" and it won't be great
             ret.foundHeaders.add((full_file_name, d))
@@ -133,8 +134,16 @@ def _findCPPIncludeForFile(
             cc_imports,
             generatedFiles,
             name,
-            generated_dir
+            use_generated_dir
         )
+        if use_generated_dir:
+            newfoundHeaders = set()
+            for e in cppIncludes.foundHeaders:
+                # The list of header might include headers with the same temporary folder used by the current file
+                # the reason for that is that current file a.h might have #include "b.h" and b.h is generated
+                # so we end-up with returning /tmp/tmpxxbbcc/subfolder1/subfolder2/b.h
+                newfoundHeaders.add((e[0].replace(tempDir, '/generated'), e[1]))
+            cppIncludes.foundHeaders = newfoundHeaders
         ret += cppIncludes
     return found, ret
 
@@ -181,8 +190,9 @@ def findCPPIncludes(
                 # Current file is generated so we are in some /tmp/tmpxxbbcc path and
                 # in this path we find `file` so it's safe to return "/generated"
                 if generated:
-                    alt_full_name = f"/generated/{file}" 
-                    ret.foundHeaders.add((alt_full_name, '/generated'))
+                    # full_file_name will have the same base folder (ie. /tmp/tmpxxbbcc) as the current file
+                    # it's ok we cppIncludes will take care of it
+                    ret.foundHeaders.add((full_file_name, '/generated'))
                 else:
                     ret.foundHeaders.add((full_file_name, current_dir))
                 cppIncludes = findCPPIncludes(
