@@ -357,7 +357,7 @@ class BazelTarget(BaseBazelTarget):
         def _getPrefix(d: BaseBazelTarget | BazelCCImport):
             if d.location.startswith("@"):
                 return d.location
-            if d.location.startswith("//"):
+            elif d.location.startswith("//"):
                 return d.location
             return f"//{d.location}" if d.location != self.location else ""
 
