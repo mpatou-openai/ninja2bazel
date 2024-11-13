@@ -181,6 +181,7 @@ class BazelBuild:
             topStanza = list(filter(lambda x: x != "", v))
             if len(topStanza) > 0:
                 # Force empty line
+                topStanza=sorted(topStanza)
                 topStanza.append("")
             logging.info(f"Top content is {topStanza}")
             ret[k] = "\n".join(topStanza)
