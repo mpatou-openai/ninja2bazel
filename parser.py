@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from typing import Dict, List
+import time
 
 from cc_import_parse import parseCCImports
 from ninjabuild import genBazelBuildFiles, getBuildTargets
@@ -88,8 +89,15 @@ def main():
             with open(i, "r") as f:
                 raw_imports.extend(f.readlines())
 
+    start = time.time()
     cc_imports = parseCCImports(raw_imports, location)
+    end = time.time()
+    print(f"Time to parse cc_imports: {end - start}", file=sys.stdout)
+    start = time.time()
     compilerIncludes = getCompilerIncludesDir()
+    end = time.time()
+    print(f"Time to getCompilerIncludes: {end - start}", file=sys.stdout)
+    start = time.time()
 
     prefix = ""
     if args.prefix != "":
@@ -122,8 +130,13 @@ def main():
         cc_imports,
         compilerIncludes,
     )
+    end = time.time()
+    print(f"Time to getBuildTargets: {end - start}", file=sys.stdout)
+    start = time.time()
     logging.info("Generating Bazel BUILD files from buildTargets")
     output = genBazelBuildFiles(top_levels_targets, rootdir, prefix)
+    end = time.time()
+    print(f"Time to generate Bazel's BUILD files: {end - start}", file=sys.stdout)
     logging.info("Done")
     for name, content in output.items():
         logging.info(f"Wrote {rootdir}{name}{os.path.sep}BUILD.bazel")
