@@ -80,7 +80,7 @@ class NinjaParser:
         self.currentRule: Optional[List[str]] = None
         self.buffer: List[str] = []
         self.all_outputs: Dict[str, BuildTarget] = {}
-        self.missing: Dict[str, Any] = {}
+        self.missing: Dict[str, BuildTarget] = {}
         self.vars: Dict[str, Dict[str, str]] = {}
         self.rules = {}
         self.rules["phony"] = Rule("phony")
@@ -323,7 +323,6 @@ class NinjaParser:
                     quiet = True
                     v.markAsExternal(quiet)
                 else:
-                    logging.info(f"Marking {d} as unknown")
                     v.markAsUnknown()
                     self.missing[d] = v
             depends.append(v)

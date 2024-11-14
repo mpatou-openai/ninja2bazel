@@ -379,7 +379,6 @@ class BazelTarget(BaseBazelTarget):
                             ret = -1
                         else:
                              ret= 1
-                        logging.info(f"Comparing {a.location}{a.name} with {b.location}{b.name} = {ret}")
                         return ret
 
                     sort_function = cmp_to_key(compare_deps)

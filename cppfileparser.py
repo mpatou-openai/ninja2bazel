@@ -88,10 +88,10 @@ def _findCPPIncludeForFile(
                 full_file_name2 = f"{cdir}/{file}"
                 if not os.path.exists(full_file_name2) or os.path.isdir(full_file_name2):
                     continue
-                logging.info(f"Found {file} in the compiler include: {cdir}")
+                logging.debug(f"Found {file} in the compiler include: {cdir}")
                 for imp in cc_imports:
                     if full_file_name2 in imp.hdrs:
-                        logging.info(f"Found {full_file_name} in {imp}")
+                        logging.debug(f"Found {full_file_name} in {imp}")
                         ret.neededImports.add(imp)
                         break
                 found = True

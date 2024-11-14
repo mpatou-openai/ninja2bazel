@@ -664,11 +664,6 @@ class Build:
             logging.info(f"Handling custom command {cmd}")
             cmdCopy = cmd
 
-            # This seems wrong to be doing that ... it leads to some arguments being striped of
-            # their final filename
-            # for i in self.outputs:
-            # FIXME comment why we are doing that
-            # cmdCopy = cmdCopy.replace(i.name, "")
             arr: List[str] = list(filter(lambda x: x != "", cmdCopy.split(" ")))
 
             for e in arr[1:]:
