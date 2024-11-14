@@ -701,7 +701,10 @@ class Build:
 
             alteredArgs = []
             command = arr[0]
-            if command.endswith(".py"):
+            if command.endswith(".py") or command.startswith("python3"):
+                firstOutput = list(outFiles)[0]
+                alteredArgs.append(f"$(location {firstOutput})")
+                alteredArgs.append("/".join([ ".." for d in firstOutput.split("/")[:-1]]))
                 lastArgIsOption = False
                 for arg in arr[1:]:
                     if arg.startswith("-"):
@@ -747,17 +750,25 @@ class Build:
                 if (countInput + countRewrote + countOptions) == len(arr[1:]):
 
                     def genShBinaryScript(rootdir: str, pycommand: str) -> str:
+                        if pycommand == "python3":
+                            pycommand = ""
                         return f"""
 echo -ne '#!/bin/bash \\n\\
 #set -x\\n\\
 cur=$$(pwd)\\n\\
-cd {rootdir}\\n\\
-# Create the symlink to the bazel-out directory\\n\\
-if [ ! -e bazel-out ]; then\\n\\
-    ln -s $$cur/bazel-out bazel-out\\n\\
-fi\\n\\
+output=$$(dirname $$1)/$$2\\n\\
+shift 2\\n\\
+#cd $$output\\n\\
+for arg in "$$@"; do\\n\\
+  if [[ "$$arg" =~ bazel-out.* ]]; then\\n\\
+    new_value="$$cur/$${{arg}}"\\n\\
+  else\\n\\
+    new_value=$${{arg}}\\n\\
+  fi\\n\\
+  modified_args+=("$$new_value")\\n\\
+done\\n\\
 export PYTHONPATH={rootdir}:$$PYTHONPATH\\n\\
-python3 {pycommand} $$@ \\n\\
+python3 {pycommand} $${{modified_args[@]}} \\n\\
 ' > $@
 chmod a+x $@
                 """
