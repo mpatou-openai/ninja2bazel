@@ -17,6 +17,27 @@ TargetType = Enum(
     "TargetType", ["other", "unknown", "known", "external", "manually_generated"]
 )
 
+def genShBinaryScript(rootdir: str, command: str) -> str:
+    return f"""
+echo -ne '#!/bin/bash \\n\\
+set -x\\n\\
+cur=$$(pwd)\\n\\
+for arg in "$$@"; do\\n\\
+  if [[ "$$arg" =~ bazel-out.* ]]; then\\n\\
+    new_value="$$cur/$${{arg}}"\\n\\
+  elif [[ -e $${{cur}}/$${{arg}} ]]; then\\n\\
+    new_value=$${{cur}}/$${{arg}}\\n\\
+  else\\n\\
+    new_value=$${{arg}}\\n\\
+  fi\\n\\
+  modified_args+=("$$new_value")\\n\\
+done\\n\\
+export PYTHONPATH={rootdir}:$$PYTHONPATH\\n\\
+{command} $${{modified_args[@]}} \\n\\
+' > $@
+chmod a+x $@
+"""
+
 
 @dataclass
 class BazelBuildVisitorContext(VisitorContext):
@@ -655,6 +676,7 @@ class Build:
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
             genTarget = getObject(BazelGenRuleTarget, f"{name}_command", location)
 
+            # allInputs is all the inputs with the rootdir stripped
             allInputs: List[str] = []
             regex = f"^{ctx.rootdir}/?"
             for i in self.inputs:
@@ -692,111 +714,92 @@ class Build:
             logging.info(
                 f"Current build path for target: {TopLevelGroupingStrategy().getBuildFilenamePath(el)}"
             )
-            # We don't need to handle the replacement of prefix and whatnot bazel seems to be able
-            # to handle it
-            cmd = cmd.replace(workDir, "")
             countRewrote = 0
             countInput = 0
             countOptions = 0
 
             alteredArgs = []
             command = arr[0]
-            if command.endswith(".py") or command.startswith("python3"):
-                firstOutput = list(outFiles)[0]
-                alteredArgs.append(f"$(location {firstOutput})")
-                alteredArgs.append("/".join([ ".." for d in firstOutput.split("/")[:-1]]))
+            firstOutput = sorted(list(outFiles))[0]
+            outputDir = f"$$(dirname $(location {firstOutput}))/"+f'{"/".join([ ".." for d in firstOutput.split("/")[:-1]])}'+'/'
+            lastArgIsOption = False
+            for arg in arr[1:]:
+                if arg.startswith("-"):
+                    # There will be an issue with options that take multiple values ie --foo bar
+                    # baz biz
+                    lastArgIsOption = True
+                    alteredArgs.append(arg)
+                    countOptions += 1
+                    continue
+
+                found = False
+                for outFile in outFiles:
+                    if outFile == os.path.basename(arg) or outFile.endswith(
+                        os.path.sep + os.path.basename(arg)
+                    ):
+                        logging.info(f"Mapping arg: {arg} to ouput: {outFile}")
+                        prefix = ":" if not outFile.startswith(":") else ""
+                        alteredArgs.append(f"$(location {prefix}{outFile})")
+                        countRewrote += 1
+                        found = True
+                        break
+                for inFile in self.inputs:
+                    inputName = inFile.name.replace(f"{ctx.rootdir}", "")
+                    logging.info(f"Checking {inputName} against {arg} {ctx.rootdir}")
+                    if inputName == arg:
+                        inputName= inputName.replace(f"{genTarget.location}/", ":")
+                        countRewrote += 1
+                        alteredArgs.append(f"$(location {inputName})")
+                        found = True
+                        break
+
+
+                if lastArgIsOption and not found:
+                    # assume that this argument is an option for the last option
+                    alteredArgs.append(arg.replace(workDir, outputDir))
+                    countOptions += 1
+                    continue
+
                 lastArgIsOption = False
-                for arg in arr[1:]:
-                    if arg.startswith("-"):
-                        # There will be an issue with options that take multiple values ie --foo bar
-                        # baz biz
-                        lastArgIsOption = True
-                        alteredArgs.append(arg)
-                        countOptions += 1
-                        continue
+                if not found:
+                    if os.path.exists(f"{ctx.rootdir}/{arg}"):
+                        countInput += 1
+                    else:
+                        logging.info(f"{arg} not found in the output hope it's ok")
+                    alteredArgs.append(arg)
+            # toolBuildTarget is a genrule() rule for building the tool that will be used by the shell
+            # script that is used for producing the output of the custom command 
+            toolBuildTarget = getObject(
+                BazelGenRuleTarget, f"{name}_cmd_build", location
+            )
+            toolBuildTarget.addOut(f"{name}_cmd.sh")
+            # Add the sha1 of all inputs to force rebuild if intput file changes
 
-                    found = False
-                    for outFile in outFiles:
-                        if outFile == os.path.basename(arg) or outFile.endswith(
-                            os.path.sep + os.path.basename(arg)
-                        ):
-                            logging.info(f"Mapping arg: {arg} to ouput: {outFile}")
-                            prefix = ":" if not outFile.startswith(":") else ""
-                            alteredArgs.append(f"$(location {prefix}{outFile})")
-                            countRewrote += 1
-                            found = True
-                            break
-
-                    if lastArgIsOption and not found:
-                        # assume that this argument is an option for the last option
-                        alteredArgs.append(arg)
-                        countOptions += 1
-                        continue
-
-                    lastArgIsOption = False
-                    if not found:
-                        if os.path.exists(f"{ctx.rootdir}/{arg}"):
-                            countInput += 1
-                        else:
-                            logging.info(f"{arg} not found in the output hope it's ok")
-                        alteredArgs.append(arg)
-                # Generate a shell script to run the custom command
-                buildTarget = getObject(
-                    BazelGenRuleTarget, f"{name}_cmd_build", location
+            if (countInput + countRewrote + countOptions) != len(arr[1:]):
+                logging.warn(
+                    f"Need to write the function for dealing with non fully rewritten arguments for {el.name}"
+                    f", {countInput}, {countRewrote}, {countOptions} {len(arr[1:])}"
                 )
-                buildTarget.addOut(f"{name}_cmd.sh")
-                # Add the sha1 of all inputs to force rebuild if intput file changes
+            if command.endswith(".py"):
+                command = f"python3 {command}"
 
-                if (countInput + countRewrote + countOptions) == len(arr[1:]):
+            toolBuildTarget.cmd = genShBinaryScript(ctx.rootdir, command)
+            # Make a sh_binary target out of iter
+            shBinary = ShBinaryBazelTarget(f"{name}_cmd", location)
+            shBinary.addSrc(toolBuildTarget)
+            genTarget.cmd = (
+                f"./$(location {shBinary.targetName()})"
+                + " "
+                + " ".join(alteredArgs)
+            )
+            genTarget.addTool(shBinary)
 
-                    def genShBinaryScript(rootdir: str, pycommand: str) -> str:
-                        if pycommand == "python3":
-                            pycommand = ""
-                        return f"""
-echo -ne '#!/bin/bash \\n\\
-#set -x\\n\\
-cur=$$(pwd)\\n\\
-output=$$(dirname $$1)/$$2\\n\\
-shift 2\\n\\
-#cd $$output\\n\\
-for arg in "$$@"; do\\n\\
-  if [[ "$$arg" =~ bazel-out.* ]]; then\\n\\
-    new_value="$$cur/$${{arg}}"\\n\\
-  else\\n\\
-    new_value=$${{arg}}\\n\\
-  fi\\n\\
-  modified_args+=("$$new_value")\\n\\
-done\\n\\
-export PYTHONPATH={rootdir}:$$PYTHONPATH\\n\\
-python3 {pycommand} $${{modified_args[@]}} \\n\\
-' > $@
-chmod a+x $@
-                """
+            # Not sure that it's actually needed
+            for e in allInputs:
+                toolBuildTarget.addSrc(self._genExportedFile(e, genTarget.location))
+            ctx.bazelbuild.bazelTargets.add(toolBuildTarget)
+            ctx.bazelbuild.bazelTargets.add(shBinary)
 
-                else:
-                    logging.warn(
-                        f"Need to write the function for dealing with non fully rewritten arguments for {el.name}"
-                        f", {countInput}, {countRewrote}, {countOptions} {len(arr[1:])}"
-                    )
-
-                buildTarget.cmd = genShBinaryScript(ctx.rootdir, command)
-                # Make a sh_binary target out of iter
-                shBinary = ShBinaryBazelTarget(f"{name}_cmd", location)
-                shBinary.addSrc(buildTarget)
-                genTarget.cmd = (
-                    f"./$(location {shBinary.targetName()})"
-                    + " "
-                    + " ".join(alteredArgs)
-                )
-                genTarget.addTool(shBinary)
-                for e in allInputs:
-                    if e.endswith(".py"):
-                        buildTarget.addSrc(self._genExportedFile(e, genTarget.location))
-                ctx.bazelbuild.bazelTargets.add(buildTarget)
-                ctx.bazelbuild.bazelTargets.add(shBinary)
-
-            else:
-                genTarget.cmd = cmd.strip()
             ctx.bazelbuild.bazelTargets.add(genTarget)
             self.setAssociatedBazelTarget(genTarget)
         else:
