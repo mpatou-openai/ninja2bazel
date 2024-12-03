@@ -302,7 +302,7 @@ class NinjaParser:
                     raw_depends.append(l)   
         depends = []
         for d in raw_depends:
-            regex = r".*/libgrpc(\.|\+).*"
+            regex = r".*/lib(grpc|protobuf)(\.|\+).*"
             if re.match(regex, d):
                 continue
             if re.match(r".*ares\.", d):

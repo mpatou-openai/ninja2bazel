@@ -427,8 +427,16 @@ class Build:
                 logging.debug(f"Visiting dep {dep}")
                 if ctx.current is not None:
                     if isinstance(dep, BazelCCImport):
-                        ctx.current.addDep(dep)
-                        ctx.bazelbuild.bazelTargets.add(dep)
+                        if dep.name == "protobuf":
+                            logging.info("Adding any_cc_proto")
+                            any_proto = getObject(BazelExternalDep, "any_proto", "@com_google_protobuf//")
+                            any_cc_proto = getObject(BazelCCProtoLibrary, "any_cc_proto", ctx.current.location)
+                            any_cc_proto.addDep(any_proto)
+                            ctx.current.addDep(any_cc_proto)
+                            ctx.bazelbuild.bazelTargets.add(any_cc_proto)
+                        else:
+                            ctx.current.addDep(dep)
+                            ctx.bazelbuild.bazelTargets.add(dep)
                     elif isinstance(dep, Build):
                         logging.info(f"Dep {dep} is a Build")
                     else:
@@ -444,8 +452,21 @@ class Build:
         ):
             maybe_cc_import = el.opaque
             if isinstance(maybe_cc_import, BazelCCImport):
-                ctx.current.addDep(maybe_cc_import)
-                ctx.bazelbuild.bazelTargets.add(maybe_cc_import)
+                # We handle protobuf very differently
+                # We already have somewhere else the dependecy on protobuf most
+                # probably from the cc_proto_library or cc_grpc_library
+                # so we don't need to add it here but we still create a library for any.pb.h
+                if maybe_cc_import.name == "protobuf":
+                    logging.info("Adding any_cc_proto")
+                    any_proto = getObject(BazelExternalDep, "any_proto", "@com_google_protobuf//")
+                    any_cc_proto = getObject(BazelCCProtoLibrary, "any_cc_proto", ctx.current.location)
+                    any_cc_proto.addDep(any_proto)
+                    ctx.current.addDep(any_cc_proto)
+                    ctx.bazelbuild.bazelTargets.add(any_cc_proto)
+                else:
+                    logging.info(f"Adding {maybe_cc_import.name} to {ctx.current.name}")
+                    ctx.current.addDep(maybe_cc_import)
+                    ctx.bazelbuild.bazelTargets.add(maybe_cc_import)
                 return
         # logging.info(f"handleFileForBazelGen {el.name}")
         if not ctx.current:

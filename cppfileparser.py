@@ -105,7 +105,7 @@ def _findCPPIncludeForFile(
         # Check if the file is part of the cc_imports as we don't want to recurse for headers there
         for imp in cc_imports:
             if full_file_name in imp.hdrs:
-                logging.info(f"Found {full_file_name} in {imp}")
+                logging.info(f"Found {full_file_name} in cc_import {imp}")
                 ret.neededImports.add(imp)
                 found = True
                 break
