@@ -81,25 +81,25 @@ def _findCPPIncludeForFile(
             logging.debug(f"Found generated {file} in the includes variable")
             break
 
-        if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
-            # Check if the file is part of the compiler include as we don't want to recurse for headers
-            # there too
-            for cdir in compilerIncludes:
-                full_file_name2 = f"{cdir}/{file}"
-                if not os.path.exists(full_file_name2) or os.path.isdir(full_file_name2):
-                    continue
-                logging.debug(f"Found {file} in the compiler include: {cdir}")
-                for imp in cc_imports:
-                    if full_file_name2 in imp.hdrs:
-                        logging.debug(f"Found {full_file_name} in {imp}")
-                        ret.neededImports.add(imp)
-                        break
-                found = True
-                break
-            if not found:
+        # Search in the compiler include, depending on how things were done in the Ninja file
+        # the include path might have it or not ...
+        for cdir in compilerIncludes:
+            full_file_name2 = f"{cdir}/{file}"
+            if not os.path.exists(full_file_name2) or os.path.isdir(full_file_name2):
                 continue
-            else:
-                break
+            logging.debug(f"Found {file} in the compiler include path: {cdir}")
+            # File might be in the standard include path of the compiler but still coming from
+            # an external packate that we need to depends on
+            for imp in cc_imports:
+                if full_file_name2 in imp.hdrs:
+                    logging.debug(f"Found {full_file_name} in {imp}")
+                    ret.neededImports.add(imp)
+                    break
+            found = True
+            break
+
+        if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
+            continue
 
         logging.debug(f"Found {file} in the includes variable")
         # Check if the file is part of the cc_imports as we don't want to recurse for headers there
