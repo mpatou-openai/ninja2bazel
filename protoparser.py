@@ -34,5 +34,8 @@ def findProtoIncludes(name: str, includeDirs: Set[str]) -> List[Tuple[str, str]]
                 logging.info(f"Found {match.group(1)} in {d}")
                 ret.append((filename, d))
                 ret.extend(findProtoIncludes(filename, includeDirs))
+                break
+            else:
+                logging.debug(f"Did not find {filename}")
     cache[key] = ret
     return ret
