@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from bazel import BazelBuild, BazelCCImport
@@ -71,7 +72,7 @@ def isProtoLikeFile(name: str) -> bool:
 
 class NinjaParser:
     def __init__(self, codeRootDir: str):
-        self.generatedFiles: Dict[str, tuple[Build, str|None]] = {}
+        self.generatedFiles: Dict[str, tuple[Build, str | None]] = {}
         self.missingFiles: Dict[str, List[Build]] = {}
         self.codeRootDir = codeRootDir
         self.buildEdges: List[Build] = []
@@ -94,7 +95,9 @@ class NinjaParser:
         self.cacheHeaders: Dict[str, CPPIncludes] = {}
         self.generatedFilesLogged: Set[Tuple[str, str]] = set()
 
-    def getShortName(self, name, workDir=None, generated=False) -> Tuple[str, Optional[str]]:
+    def getShortName(
+        self, name, workDir=None, generated=False
+    ) -> Tuple[str, Optional[str]]:
         if name.startswith(self.codeRootDir):
             return (name[len(self.codeRootDir) :], None)
         if workDir is None:
@@ -299,7 +302,7 @@ class NinjaParser:
         if vars.get("LINK_LIBRARIES"):
             for l in vars["LINK_LIBRARIES"].split(" "):
                 if (l.endswith(".a") or l.endswith(".so")) and not l.startswith("/"):
-                    raw_depends.append(l)   
+                    raw_depends.append(l)
         depends = []
         for d in raw_depends:
             regex = r".*/lib(grpc|protobuf)(\.|\+).*"
@@ -571,7 +574,9 @@ class NinjaParser:
                 generated = False
                 filename = None
                 shortedName = i.name.replace(workDir, "")
-                logging.debug(f"Dealing with {i.name} {shortedName} {isCPPLikeFile(i.name)} {shortedName}") 
+                logging.debug(
+                    f"Dealing with {i.name} {shortedName} {isCPPLikeFile(i.name)} {shortedName}"
+                )
                 if isCPPLikeFile(shortedName):
                     if i.is_a_file:
                         filename = i.name
@@ -587,7 +592,9 @@ class NinjaParser:
 
                 if filename is not None:
                     includes_dirs = parseIncludes(build.vars.get("INCLUDES", ""))
-                    logging.debug(f"Looking for header in {filename} with includes {includes_dirs} in {build}")
+                    logging.debug(
+                        f"Looking for header in {filename} with includes {includes_dirs} in {build}"
+                    )
                     updated_include_dirs = []
                     for dir in includes_dirs:
                         if dir.startswith(workDir):
@@ -608,7 +615,7 @@ class NinjaParser:
                         self.compilerIncludes,
                         self.cc_imports,
                         self.generatedFiles,
-                        None, # Parent
+                        None,  # Parent
                         generated,
                     )
                     if len(cppIncludes.notFoundHeaders) > 0:
@@ -624,7 +631,9 @@ class NinjaParser:
                                 self.missingFiles[h].append(build)
                     allIncludes = []
                     for h2 in list(cppIncludes.foundHeaders):
-                        name = self.getShortName(h2[0].replace("/generated", workDir), workDir)
+                        name = self.getShortName(
+                            h2[0].replace("/generated", workDir), workDir
+                        )
                         includeDir = h2[1]
                         allIncludes.append((name[0], includeDir))
                     i.setIncludedFiles(allIncludes)
@@ -650,12 +659,14 @@ class NinjaParser:
                         for bldTgt in self.generatedFiles[h2[0]][0].outputs:
                             # We do 2 things for generated headers:
                             # 1. we add them (eventually through generatedOutputNeeded) to the input of the current built
-                            # so that they are a dependency so that we know exactly the name of the target to use 
+                            # so that they are a dependency so that we know exactly the name of the target to use
                             # as the target name might be a mix between the filename and the include path (partial)
                             # 2. we add it as include too so that the include directory is properly recoreded
                             includeDir = h2[1]
                             if bldTgt.name == h2[0]:
-                                logging.debug(f"For {filename} need generated file  {h2[0]} requires build target {bldTgt.name}")
+                                logging.debug(
+                                    f"For {filename} need generated file  {h2[0]} requires build target {bldTgt.name}"
+                                )
                                 generatedOutputsNeeded.add(bldTgt)
                         i.addIncludedFile((h2[0], includeDir))
                 if i.is_a_file and isProtoLikeFile(i.name):
@@ -707,8 +718,17 @@ class NinjaParser:
         # We might want to iterate twice on the values,
         # the first time we might want to get the builds that are custom commands because they are
         # supposed to generate files that are used by other builds
+        start = time.time()
         trees = self._finalizeHeadersForGeneratedFiles(current_dir)
+        end = time.time()
+        print(f"Time to finalize header for generated = {end - start}", file=sys.stdout)
+        start = end
         self._finalizeHeadersForNonGeneratedFiles(current_dir)
+        end = time.time()
+        print(
+            f"Time to finalize header for non generated = {end - start}",
+            file=sys.stdout,
+        )
         for ret in trees:
             try:
                 shutil.rmtree(ret)
