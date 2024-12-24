@@ -55,6 +55,9 @@ def _findCPPIncludeForFile(
     ret = CPPIncludes(set(), set(), set(), set())
     check = False
 
+    
+    logging.info(f"_findCPPIncludeForFile: {file}")
+
     for d in includes_dirs:
         use_generated_dir = False
         if d == "/generated":
@@ -120,7 +123,7 @@ def _findCPPIncludeForFile(
             # we don't want to add it as is to the list of headers otherwise we will have a "/tmp" and it won't be great
             ret.foundHeaders.add((full_file_name, d))
         else:
-            ret.foundHeaders.add(("/generated" + generatedFileFullName, d))
+            ret.neededGeneratedFiles.add(("/generated" + generatedFileFullName, d))
 
         found = True
         check = True
@@ -142,7 +145,10 @@ def _findCPPIncludeForFile(
                 # The list of header might include headers with the same temporary folder used by the current file
                 # the reason for that is that current file a.h might have #include "b.h" and b.h is generated
                 # so we end-up with returning /tmp/tmpxxbbcc/subfolder1/subfolder2/b.h
-                newfoundHeaders.add((e[0].replace(tempDir, '/generated'), e[1]))
+                if e[0].startswith(tempDir):
+                    cppIncludes.neededGeneratedFiles.add((e[0].replace(tempDir, '/generated'), e[1]))
+                else:
+                    newfoundHeaders.add((e[0], e[1]))
             cppIncludes.foundHeaders = newfoundHeaders
         ret += cppIncludes
     return found, ret
@@ -158,14 +164,15 @@ def findCPPIncludes(
     generated: bool = False,
 ) -> CPPIncludes:
     key = f"{name} {includes_dirs}"
+    seenkey = key
     ret = CPPIncludes(set(), set(), set(), set())
     # There is sometimes loop, as we don't really implement the #pragma once
     # deal with it
     if key in cache:
         return cache[key]
-    if key in seen:
+    if seenkey in seen:
         return ret
-    seen.add(key)
+    seen.add(seenkey)
     current_dir = os.path.dirname(os.path.abspath(name))
     logging.debug(f"Handling findCPPIncludes {name}")
     with open(name, "r") as f:
@@ -182,7 +189,7 @@ def findCPPIncludes(
             full_file_name = f"{current_dir}/{file}"
             if os.path.exists(full_file_name) and not os.path.isdir(full_file_name):
                 found = True
-                logging.debug(f"Found {file} in the same directory as the looked file")
+                logging.debug(f"Found {file} in the same directory as the looked file generated {generated}")
                 # Not sure if it's actually a good idea to use realpath
                 # We need a way of dealing with path with ..
                 # full_file_name = os.path.realpath(full_file_name)
@@ -192,7 +199,20 @@ def findCPPIncludes(
                 if generated:
                     # full_file_name will have the same base folder (ie. /tmp/tmpxxbbcc) as the current file
                     # it's ok we cppIncludes will take care of it
-                    ret.foundHeaders.add((full_file_name, '/generated'))
+
+                    # So this is tricky we don't know the generic name here only the resolved one and removing the folder of the file where we 
+                    # found this include won't help because it's most probably not the one used in generatedFiles dict.
+                    # So we will need to iterate on the dict look for the values 
+                    foundGenerated = False
+                    for k, v in generatedFiles.items():
+                        logging.info(f"Checking {k} against {name}")
+                        if name.endswith(k):
+                            foundGenerated = True
+                            genericGeneratedHeader = f"{name.replace(v[1]+'/','').replace(os.path.basename(k), file)}"
+                            ret.neededGeneratedFiles.add((genericGeneratedHeader, '/generated'))
+                            break
+                    if not foundGenerated:
+                        logging.error(f"Could not find {full_file_name} in the generated files")
                 else:
                     ret.foundHeaders.add((full_file_name, current_dir))
                 cppIncludes = findCPPIncludes(

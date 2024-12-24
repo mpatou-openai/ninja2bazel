@@ -71,7 +71,7 @@ def isProtoLikeFile(name: str) -> bool:
 
 class NinjaParser:
     def __init__(self, codeRootDir: str):
-        self.generatedFiles: Dict[str, Any] = {}
+        self.generatedFiles: Dict[str, tuple[Build, str|None]] = {}
         self.missingFiles: Dict[str, List[Build]] = {}
         self.codeRootDir = codeRootDir
         self.buildEdges: List[Build] = []
@@ -564,10 +564,30 @@ class NinjaParser:
                 continue
             workDir = build.vars.get("cmake_ninja_workdir", "")
             generatedOutputsNeeded = set()
-
+            if build.rulename.name == "phony":
+                # We don't want to deal with phony targets
+                continue
             for i in build.inputs:
-                if i.is_a_file and isCPPLikeFile(i.name):
+                generated = False
+                filename = None
+                shortedName = i.name.replace(workDir, "")
+                logging.debug(f"Dealing with {i.name} {shortedName} {isCPPLikeFile(i.name)} {shortedName}") 
+                if isCPPLikeFile(shortedName):
+                    if i.is_a_file:
+                        filename = i.name
+                    elif self.generatedFiles.get(shortedName) is not None:
+                        generated = True
+                        tmp = self.generatedFiles[shortedName]
+                        # tmp is a tuple build / path where the generated file is stored
+                        if tmp[1] is None:
+                            logging.info(f"Path for {tmp[0] is None} skipping")
+                            continue
+                        else:
+                            filename = f"{tmp[1]}/{shortedName}"
+
+                if filename is not None:
                     includes_dirs = parseIncludes(build.vars.get("INCLUDES", ""))
+                    logging.debug(f"Looking for header in {filename} with includes {includes_dirs} in {build}")
                     updated_include_dirs = []
                     for dir in includes_dirs:
                         if dir.startswith(workDir):
@@ -583,11 +603,13 @@ class NinjaParser:
 
                     includes_dirs = set(updated_include_dirs)
                     cppIncludes = findCPPIncludes(
-                        i.name,
+                        filename,
                         includes_dirs,
                         self.compilerIncludes,
                         self.cc_imports,
                         self.generatedFiles,
+                        None, # Parent
+                        generated,
                     )
                     if len(cppIncludes.notFoundHeaders) > 0:
                         for h in cppIncludes.notFoundHeaders:
@@ -625,14 +647,16 @@ class NinjaParser:
                                     # We need to add it so that the include path is correctly build
                                     i.addIncludedFile((f"FAKE{h2[0]}", h2[1]))
                             continue
-                        for bld in self.generatedFiles[h2[0]][0].outputs:
+                        for bldTgt in self.generatedFiles[h2[0]][0].outputs:
+                            # We do 2 things for generated headers:
+                            # 1. we add them (eventually through generatedOutputNeeded) to the input of the current built
+                            # so that they are a dependency so that we know exactly the name of the target to use 
+                            # as the target name might be a mix between the filename and the include path (partial)
+                            # 2. we add it as include too so that the include directory is properly recoreded
                             includeDir = h2[1]
-                            if bld.name == h2[0]:
-                                # It's a bit weird that we "self" include ourselve
-                                # but that's the only simple way to keep track of the needed
-                                # includeDir
-                                # bld.includes.add((h2[0], includeDir))
-                                generatedOutputsNeeded.add(bld)
+                            if bldTgt.name == h2[0]:
+                                logging.debug(f"For {filename} need generated file  {h2[0]} requires build target {bldTgt.name}")
+                                generatedOutputsNeeded.add(bldTgt)
                         i.addIncludedFile((h2[0], includeDir))
                 if i.is_a_file and isProtoLikeFile(i.name):
                     includes_dirs = set()

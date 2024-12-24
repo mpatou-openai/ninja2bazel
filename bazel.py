@@ -508,7 +508,7 @@ class BazelCCProtoLibrary(BaseBazelTarget):
         self.deps: Set[BaseBazelTarget] = set()
 
     def addDep(self, dep: Union[BaseBazelTarget, BazelCCImport]):
-        assert isinstance(dep, BazelProtoLibrary)
+        assert (isinstance(dep, BazelProtoLibrary) or isinstance(dep, BazelExternalDep))
         self.deps.add(dep)
 
     def targetName(self) -> str:
@@ -525,7 +525,13 @@ class BazelCCProtoLibrary(BaseBazelTarget):
         if len(self.deps) > 0:
             ret.append("    deps = [")
             for d in sorted(self.deps):
-                pathPrefix = f"//{d.location}" if d.location != self.location else ""
+                pathPrefix=""
+                if d.location.startswith("@"):
+                    pathPrefix = d.location
+                else:
+                    pathPrefix = (
+                        f"//{d.location}" if d.location != self.location else ""
+                    )
                 ret.append(f'        "{pathPrefix}{d.targetName()}",')
             ret.append("    ],")
         ret.append(")")

@@ -518,52 +518,57 @@ class Build:
                 logging.debug(f"Dealing with external dep {el.name}")
                 return
             # Not produced aka it's a file
-            # we have to parse the file and see if there is any includes
-            # if it's a "" include then we look first in the path where the file is and then
-            # in the path specified with -I
             ctx.current.addSrc(cls._genExportedFile(el.shortName, ctx.current.location))
 
             if el.includes is None:
                 return
-            incDirs = set()
             workDir = None
             if el.producedby is not None:
                 workDir = el.producedby.vars.get("cmake_ninja_workdir", "")
-            for i, d in el.includes:
-                incDirs.add(d)
-                generated = False
-                if d.startswith(ctx.rootdir):
-                    includeDir = d.replace(ctx.rootdir, "")
-                elif d.startswith("/") and workDir is not None:
-                    includeDir = d.replace(workDir, "")
-                    generated = True
-                elif d.startswith("/generated"):
-                    # it's not very often visited
-                    generated = True
-                    includeDir = d.replace("/generated", "")
-                    ctx.current.addIncludeDir((includeDir, True))  # type: ignore
-                    ctx.current.addNeededGeneratedFiles(i)  # type: ignore
-                    logging.debug(f"Skipping adding generated header {i} {includeDir}")
+            cls._handleIncludeBazelTarget(el, ctx, workDir)
+            if not isinstance(ctx.current, BazelTarget):
+                return
+
+    @classmethod
+    def _handleIncludeBazelTarget(
+            cls,
+            el: "BuildTarget",
+            ctx: BazelBuildVisitorContext,
+            workDir: str|None):
+        for i, d in el.includes:
+            generated = False
+            if d.startswith(ctx.rootdir):
+                includeDir = d.replace(ctx.rootdir, "")
+            elif workDir is not None and d.startswith(workDir):
+                includeDir = d.replace(workDir, "")
+                generated = True
+            elif d.startswith("/generated"):
+                generated = True
+                includeDir = d.replace("/generated", "")
+                ctx.current.addIncludeDir((includeDir, True))  # type: ignore
+                    # add to the neededGeneratedFiles for this bazelTarget so that
+                    # when we process the buildTarget for the needed generated file we know where we need
+                    # to add it as a include
+                ctx.current.addNeededGeneratedFiles(i)  # type: ignore
+                logging.info(f"Skipping adding generated header {i} -I {includeDir} in {el}")
                     # Do not add the header to the list of headers to the bazel build object, this will be done
                     # when we will visit the build object for the generated files
-                    continue
-                else:
-                    # This should never be visited
-                    logging.error(f"{el.name} depends on {i} in {d}")
-                    includeDir = "This is wrong"
+                continue
+            else:
+                # This should never be visited
+                logging.error(f"{el.name} depends on {i} in {d}")
+                includeDir = "This is wrong"
 
-                if isinstance(ctx.current, BazelTarget):
-                    logging.debug(f"Adding header {i} {includeDir}")
-                    ctx.current.addHdr(
+            if isinstance(ctx.current, BazelTarget):
+                logging.debug(f"Adding header {i} {includeDir}")
+                ctx.current.addHdr(
                         cls._genExportedFile(i, ctx.current.location),
                         (includeDir, generated),
                     )
-                else:
-                    logging.warn(
+            else:
+                logging.warn(
                         f"{i} is a header file but {ctx.current} is not a BazelTarget that can have headers"
                     )
-            if not isinstance(ctx.current, BazelTarget):
-                return
 
     @classmethod
     def handleManuallyGeneratedForBazelGen(
@@ -768,9 +773,14 @@ class Build:
                     inputName = inFile.name.replace(f"{ctx.rootdir}", "")
                     logging.info(f"Checking {inputName} against {arg} {ctx.rootdir}")
                     if inputName == arg:
-                        inputName= inputName.replace(f"{genTarget.location}/", ":")
+                        inputLocation = BuildFileGroupingStrategy().getBuildFilenamePathFromFilename(inputName)
+                        inputFileTarget = BuildFileGroupingStrategy().getBuildTarget(inputName, genTarget.location)
                         countRewrote += 1
-                        alteredArgs.append(f"$(location {inputName})")
+                        if inputLocation != genTarget.location:
+                            alteredArgs.append(f"$(location //{inputLocation}{inputFileTarget})")
+                        else:
+                            alteredArgs.append(f"$(location {inputFileTarget})")
+
                         found = True
                         break
 
@@ -827,6 +837,7 @@ class Build:
             tmp = self.associatedBazelTarget
             assert isinstance(tmp, BazelGenRuleTarget)
             genTarget = tmp
+            workDir = self.vars.get("cmake_ninja_workdir", "")
 
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el) + "/"
         logging.info(f"Looking for generated files for {el.shortName} in {location}")
@@ -838,30 +849,26 @@ class Build:
         for t in outs:
             if ctx.current is not None:
                 logging.debug(
-                    f"Looking for generated file {t} in {ctx.current.neededGeneratedFiles}"
+                    f"Looking generated file {t} in {ctx.current.neededGeneratedFiles}"
                 )
                 # ignoretype
                 if t.name.endswith(".h") and t in ctx.current.neededGeneratedFiles:
                     logging.debug(f"Found {t} in {ctx.current.neededGeneratedFiles}")
-                    # Figure out if we need some strip_include_prefix by matching the file
+                    # TODO Figure out if we need some strip_include_prefix by matching the file
                     # with the different -I flags from the command line
                     assert isinstance(ctx.current, BazelTarget)
-                    # Add the header, indicate that it's a generated header
                     if len(el.includes) == 0:
                         ctx.current.addHdr(t)
-                    if len(el.includes) > 1:
-                        logging.error(
-                            f"There is a problem {t} has more than one include directory and we don't know how to handle that properly (yet), will dump all the directories and hope it will work ..."
-                        )
-                    for inc in el.includes:
-                        logging.info(f"Adding generated header {t}, {inc[1]}")
-                        ctx.current.addHdr(t, (inc[1], True))
+                # The current buildTarget is a C/C++ file it means that the current build (ie. binary/test/lib) 
+                # has it as input, so we add it as a src to the current bazelTarget
                 if (
                     t.name.endswith(".c")
                     or t.name.endswith(".cc")
                     or t.name.endswith(".cpp")
                 ):
                     ctx.current.addSrc(t)
+                    logging.debug(f"Found {t} in {ctx.current.name} CC")
+                    self._handleIncludeBazelTarget(el, ctx, workDir)
             elif ctx.current is not None:
                 logging.warn(f"No dest for custom command: {el}")
                 [ctx.current.addDep(o) for o in outs]
@@ -1086,6 +1093,10 @@ class Build:
             + f"{' '.join([str(i) for i in self.depends])} => "
             f"{self.rulename.name} => {' '.join([str(i) for i in self.outputs])}"
         )
+    
+    @property 
+    def name(self) -> str:
+        return f"{self.outputs[-1]}_{self.rulename.name}"
 
     def getRawcommand(self) -> str:
         return self.rulename.vars.get("COMMAND", "")
