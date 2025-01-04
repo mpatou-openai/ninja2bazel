@@ -20,7 +20,7 @@ TargetType = Enum(
 def genShBinaryScript(rootdir: str, command: str) -> str:
     return f"""
 echo -ne '#!/bin/bash \\n\\
-set -x\\n\\
+#set -x\\n\\
 cur=$$(pwd)\\n\\
 for arg in "$$@"; do\\n\\
   if [[ "$$arg" =~ bazel-out.* ]]; then\\n\\
