@@ -5,6 +5,7 @@ from functools import total_ordering
 from functools import cmp_to_key
 from typing import Any, Dict, List, Optional, Set, Type, TypeVar, Union
 
+BazelTargetStrings = Dict[str, List[str]]
 # Define a type variable that can be any type
 T = TypeVar("T")
 
@@ -96,10 +97,34 @@ class BazelCCImport:
         else:
             return txt
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
+        output = {}
+        dirs  = []
+        val = '[]'
+        if len(self.hdrs) > 1:
+            common = sorted(findCommonPaths(self.hdrs))
+            globs =[f'"_{globifyPath(c)[1:]}"' for c in common]
+            dirs = [f'"_{c[1:]}"' for c in common]
+            val = f' glob([{",".join(globs)}])'
+        elif len(self.hdrs) == 1 and len(self.hdrs[0]) > 0:
+            val = f'["_{self.hdrs[0][1:]}"]'
+            v = f"_{'/'.join(self.hdrs[0][1:].split(os.path.sep)[:-1])}"
+            if v != "_usr/include" and v != "_usr/local/include":
+                dirs = [f'"{v}"']
+
         ret = []
-        ret.append("cc_import(")
+        ret.append("cc_library(")
         ret.append(f'    name = "{self.name}",')
+        ret.append(f'    deps = [":raw_{self.name}"],')
+        dirs_str = ",".join([ f'{d}' for d in dirs])
+        ret.append(f'    includes = [{dirs_str}],')
+        ret.append('     visibility = ["//visibility:public"],')
+        ret.append(")")
+        output[self.name] = ret
+        ret = []
+        ret.append("")
+        ret.append("cc_import(")
+        ret.append(f'    name = "raw_{self.name}",')
         if self.system_provided:
             ret.append(f'    system_provided = "{self.system_provided}",')
             if self.sharedLibrary is not None:
@@ -111,14 +136,6 @@ class BazelCCImport:
                 ret.append(
                     f'    shared_library = "{self.replaceFirst(self.sharedLibrary)}",'
                 )
-        if len(self.hdrs) > 1:
-            common = sorted(findCommonPaths(self.hdrs))
-            globs =[f'"_{globifyPath(c)[1:]}"' for c in common]
-            val = f' glob([{",".join(globs)}])'
-        elif len(self.hdrs) == 1 and len(self.hdrs[0]) > 0:
-            val = f'["_{self.hdrs[0][1:]}"]'
-        else:
-            val = '[]'
         ret.append(
             f"    hdrs = {val},"
         )
@@ -134,13 +151,18 @@ class BazelCCImport:
         ret.append('    visibility = ["//visibility:public"],')
         ret.append(")")
 
-        return ret
+        output[f"raw_{self.name}"] = ret
+        return output
 
+PostProcess = callable[[str, str], None]
 
 class BazelBuild:
     def __init__(self: "BazelBuild", prefix: str):
         self.bazelTargets: Set[Union["BaseBazelTarget", "BazelCCImport"]] = set()
         self.prefix = prefix
+
+    def addPostProcess(self, targetName: str, targetLocation: str):
+        pass
 
     def genBazelBuildContent(self) -> Dict[str, str]:
         ret: Dict[str, str] = {}
@@ -162,7 +184,9 @@ class BazelBuild:
                     location = t.location
                 body = content.get(location, [])
                 body.append(f"# Location {location}")
-                body.extend(t.asBazel())
+                for k, v2 in t.asBazel().items():
+                    # Do post processing here
+                    body.extend(v2)
                 content[location] = body
                 top = topContent.get(location)
                 if not top:
@@ -220,7 +244,7 @@ class BaseBazelTarget(object):
     def addSrc(self, target: "BaseBazelTarget"):
         raise NotImplementedError(f"addSrc not implemented for {self.__class__}")
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         raise NotImplementedError
 
     def targetName(self) -> str:
@@ -327,10 +351,11 @@ class BazelTarget(BaseBazelTarget):
             base += deps
         return base
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
-        ret.append(f'    name = "{self.targetName().replace(":", "")}",')
+        name = self.targetName().replace(":", "")
+        ret.append(f'    name = "{name}",')
         deps_headers = list(self.getAllHeaders(deps_only=True))
         headers = []
         data: List[BaseBazelTarget] = []
@@ -425,7 +450,7 @@ class BazelTarget(BaseBazelTarget):
                 ret.append(f"    ] + common_{k},")
         ret.append(")")
 
-        return ret
+        return {name: ret}
 
 
 class BazelGenRuleTarget(BaseBazelTarget):
@@ -454,7 +479,7 @@ class BazelGenRuleTarget(BaseBazelTarget):
     def addTool(self, target: BaseBazelTarget):
         self.tools.add(target)
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
@@ -477,7 +502,7 @@ class BazelGenRuleTarget(BaseBazelTarget):
         ret.append(f"    local = {self.local},")
         ret.append(")")
 
-        return ret
+        return {self.name: ret}
 
     def getOutputs(
         self, name: str, stripedPrefix: Optional[str] = None
@@ -518,7 +543,7 @@ class BazelCCProtoLibrary(BaseBazelTarget):
         # FIXME
         return []
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
@@ -536,7 +561,7 @@ class BazelCCProtoLibrary(BaseBazelTarget):
             ret.append("    ],")
         ret.append(")")
 
-        return ret
+        return {self.name: ret}
 
 
 class BazelGRPCCCProtoLibrary(BaseBazelTarget):
@@ -564,7 +589,7 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
     def targetName(self) -> str:
         return f":{self.name}"
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
@@ -585,7 +610,7 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
                 ret.append("    ],")
         ret.append(")")
 
-        return ret
+        return {self.name: ret}
 
 
 class BazelProtoLibrary(BaseBazelTarget):
@@ -618,7 +643,7 @@ class BazelProtoLibrary(BaseBazelTarget):
     def targetName(self):
         return f":{super().targetName()}"
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
@@ -640,8 +665,7 @@ class BazelProtoLibrary(BaseBazelTarget):
                 ret.append("    ],")
         ret.append(")")
 
-        return ret
-
+        return {self.name: ret}
 
 @total_ordering
 class BazelExternalDep(BaseBazelTarget):
@@ -649,8 +673,8 @@ class BazelExternalDep(BaseBazelTarget):
         super().__init__("external", name, location)
         self.deps: Set[BaseBazelTarget] = set()
 
-    def asBazel(self):
-        return []
+    def asBazel(self) -> BazelTargetStrings:
+        return {}
 
     def targetName(self):
         return f":{self.name}"
@@ -683,7 +707,7 @@ class BazelGenRuleTargetOutput(BaseBazelTarget):
         self.rule = genrule
         self.name = name
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         return self.rule.asBazel()
 
     def targetName(self) -> str:
@@ -702,7 +726,7 @@ class PyBinaryBazelTarget(BaseBazelTarget):
         self.srcs: set[BaseBazelTarget] = set()
         self.data: set[BaseBazelTarget] = set()
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
@@ -715,7 +739,7 @@ class PyBinaryBazelTarget(BaseBazelTarget):
         ret.append(f'    main = "{self.main}",')
         ret.append(")")
 
-        return ret
+        return {self.name: ret}
 
     def addSrc(self, target: BaseBazelTarget):
         self.srcs.add(target)
@@ -727,7 +751,7 @@ class ShBinaryBazelTarget(BaseBazelTarget):
         self.srcs: set[BaseBazelTarget] = set()
         self.data: set[BaseBazelTarget] = set()
 
-    def asBazel(self) -> List[str]:
+    def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
@@ -739,7 +763,7 @@ class ShBinaryBazelTarget(BaseBazelTarget):
             ret.append("    ],")
         ret.append(")")
 
-        return ret
+        return {self.name: ret}
 
     def addSrc(self, target: BaseBazelTarget):
         self.srcs.add(target)
