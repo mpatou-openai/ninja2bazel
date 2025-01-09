@@ -1,15 +1,17 @@
 import logging
 import os
 import re
-from functools import total_ordering
-from functools import cmp_to_key
-from typing import Any, Dict, List, Optional, Set, Type, TypeVar, Union
+from functools import cmp_to_key, total_ordering
+from typing import (Any, Callable, Dict, List, Optional, Set, Type, TypeVar,
+                    Union)
 
 BazelTargetStrings = Dict[str, List[str]]
 # Define a type variable that can be any type
 T = TypeVar("T")
 
 IncludeDir = tuple[str, bool]
+
+
 def findCommonPaths(paths: List[str]) -> List[str]:
     split_paths = [p.split(os.path.sep)[:-1] for p in paths]
 
@@ -22,7 +24,7 @@ def findCommonPaths(paths: List[str]) -> List[str]:
         new_joined.append(list(set(e)))
 
     ret = []
-    common  = []
+    common = []
     for e2 in new_joined:
         if len(e2) == 1:
             common.append(e2[0])
@@ -35,6 +37,7 @@ def findCommonPaths(paths: List[str]) -> List[str]:
         ret.append("/".join(common))
 
     return ret
+
 
 def globifyPath(path: str) -> str:
     return f"{path}/**/*.h"
@@ -49,6 +52,11 @@ class BazelCCImport:
         self.staticLibrary: Optional[str] = None
         self.sharedLibrary: Optional[str] = None
         self.location = ""
+        self.skipWrapping = False
+        self.includes: Optional[List[str]] = None
+
+    def setSkipWrapping(self, skipWrapping: bool):
+        self.skipWrapping = skipWrapping
 
     def setHdrs(self, hdrs: List[str]):
         self.hdrs = hdrs
@@ -99,11 +107,11 @@ class BazelCCImport:
 
     def asBazel(self) -> BazelTargetStrings:
         output = {}
-        dirs  = []
-        val = '[]'
+        dirs = []
+        val = "[]"
         if len(self.hdrs) > 1:
             common = sorted(findCommonPaths(self.hdrs))
-            globs =[f'"_{globifyPath(c)[1:]}"' for c in common]
+            globs = [f'"_{globifyPath(c)[1:]}"' for c in common]
             dirs = [f'"_{c[1:]}"' for c in common]
             val = f' glob([{",".join(globs)}])'
         elif len(self.hdrs) == 1 and len(self.hdrs[0]) > 0:
@@ -111,20 +119,31 @@ class BazelCCImport:
             v = f"_{'/'.join(self.hdrs[0][1:].split(os.path.sep)[:-1])}"
             if v != "_usr/include" and v != "_usr/local/include":
                 dirs = [f'"{v}"']
+        # Overide the dirs if includes was specified on the cc_import
+        if self.includes is not None:
+            dirs = [f'"_{d[1:]}"' for d in self.includes]
 
         ret = []
-        ret.append("cc_library(")
-        ret.append(f'    name = "{self.name}",')
-        ret.append(f'    deps = [":raw_{self.name}"],')
-        dirs_str = ",".join([ f'{d}' for d in dirs])
-        ret.append(f'    includes = [{dirs_str}],')
-        ret.append('     visibility = ["//visibility:public"],')
-        ret.append(")")
-        output[self.name] = ret
-        ret = []
-        ret.append("")
+        if not self.skipWrapping:
+            ret.append("cc_library(")
+            ret.append(f'    name = "{self.name}",')
+            ret.append(f'    deps = [":raw_{self.name}"],')
+            dirs_str = ",".join([f"{d}" for d in dirs])
+            ret.append(f"    includes = [{dirs_str}],")
+            ret.append('    visibility = ["//visibility:public"],')
+            ret.append(")")
+            ret.append("")
+
+            output[self.name] = ret
+            ret = []
+            # Prefix for the cc_import library, if we wrap we need to add a prefix to avoid collisions
+            prefix="raw_"
+        else:
+            prefix = ""
+
         ret.append("cc_import(")
-        ret.append(f'    name = "raw_{self.name}",')
+
+        ret.append(f'    name = "{prefix}{self.name}",')
         if self.system_provided:
             ret.append(f'    system_provided = "{self.system_provided}",')
             if self.sharedLibrary is not None:
@@ -136,9 +155,7 @@ class BazelCCImport:
                 ret.append(
                     f'    shared_library = "{self.replaceFirst(self.sharedLibrary)}",'
                 )
-        ret.append(
-            f"    hdrs = {val},"
-        )
+        ret.append(f"    hdrs = {val},")
         if self.staticLibrary is not None:
             ret.append(
                 f'    static_library = "{self.replaceFirst(self.staticLibrary)}",'
@@ -146,7 +163,10 @@ class BazelCCImport:
         if len(self.deps) > 0:
             ret.append("    deps = [")
             for d in sorted(self.deps):
-                ret.append(f'        ":{d.strip()}",')
+                depPrefix=""
+                if not d.startswith("@"):
+                    depPrefix = ":"
+                ret.append(f'        "{depPrefix}{d.strip()}",')
             ret.append("    ],")
         ret.append('    visibility = ["//visibility:public"],')
         ret.append(")")
@@ -154,15 +174,18 @@ class BazelCCImport:
         output[f"raw_{self.name}"] = ret
         return output
 
-PostProcess = callable[[str, str], None]
+
+PostProcess = Callable[[List[str]],List[str]]
+
 
 class BazelBuild:
     def __init__(self: "BazelBuild", prefix: str):
         self.bazelTargets: Set[Union["BaseBazelTarget", "BazelCCImport"]] = set()
         self.prefix = prefix
+        self.postProcess: Dict[str, PostProcess] = {}
 
-    def addPostProcess(self, targetName: str, targetLocation: str):
-        pass
+    def addPostProcess(self, targetName: str, targetLocation: str, postProcessCallback: PostProcess):
+        self.postProcess[f"{targetName}{targetLocation}"] = postProcessCallback  
 
     def genBazelBuildContent(self) -> Dict[str, str]:
         ret: Dict[str, str] = {}
@@ -186,6 +209,8 @@ class BazelBuild:
                 body.append(f"# Location {location}")
                 for k, v2 in t.asBazel().items():
                     # Do post processing here
+                    if self.postProcess.get(f"{k}{location}"):
+                        v2 = self.postProcess[f"{k}{location}"](v2)
                     body.extend(v2)
                 content[location] = body
                 top = topContent.get(location)
@@ -205,7 +230,7 @@ class BazelBuild:
             topStanza = list(filter(lambda x: x != "", v))
             if len(topStanza) > 0:
                 # Force empty line
-                topStanza=sorted(topStanza)
+                topStanza = sorted(topStanza)
                 topStanza.append("")
             logging.info(f"Top content is {topStanza}")
             ret[k] = "\n".join(topStanza)
@@ -369,7 +394,9 @@ class BazelTarget(BaseBazelTarget):
                     headers.append(h)
                 else:
                     if self.type != "cc_library":
-                        logging.warn(f"There is some kind of header that didn't match .h/.hpp/.tcc adding to data but it's likely to not work well")
+                        logging.warn(
+                            f"There is some kind of header that didn't match .h/.hpp/.tcc adding to data but it's likely to not work well"
+                        )
                         data.append(h)
 
         sources = [f for f in self.srcs]
@@ -391,6 +418,7 @@ class BazelTarget(BaseBazelTarget):
                 ret.append(f"    {k} = [")
                 # Let's have a different sorting function for deps
                 if k == "deps":
+
                     def compare_deps(a, b):
                         ret = 0
                         if a.location[0] == b.location[0]:
@@ -400,10 +428,10 @@ class BazelTarget(BaseBazelTarget):
                                 ret = 1
                             else:
                                 ret = -1
-                        elif a.location[0] == '@':
+                        elif a.location[0] == "@":
                             ret = -1
                         else:
-                             ret= 1
+                            ret = 1
                         return ret
 
                     sort_function = cmp_to_key(compare_deps)
@@ -428,7 +456,7 @@ class BazelTarget(BaseBazelTarget):
         # FIXME for the moment move defines to copts so that they are not propagated to
         # the targets that depends on it
         for define in self.defines:
-            define = define.replace('"', '')
+            define = define.replace('"', "")
             copts.add(f'"-D{define}"')
         self.defines = set()
         if self.type in ("cc_library", "cc_binary", "cc_test"):
@@ -533,7 +561,7 @@ class BazelCCProtoLibrary(BaseBazelTarget):
         self.deps: Set[BaseBazelTarget] = set()
 
     def addDep(self, dep: Union[BaseBazelTarget, BazelCCImport]):
-        assert (isinstance(dep, BazelProtoLibrary) or isinstance(dep, BazelExternalDep))
+        assert isinstance(dep, BazelProtoLibrary) or isinstance(dep, BazelExternalDep)
         self.deps.add(dep)
 
     def targetName(self) -> str:
@@ -550,7 +578,7 @@ class BazelCCProtoLibrary(BaseBazelTarget):
         if len(self.deps) > 0:
             ret.append("    deps = [")
             for d in sorted(self.deps):
-                pathPrefix=""
+                pathPrefix = ""
                 if d.location.startswith("@"):
                     pathPrefix = d.location
                 else:
@@ -666,6 +694,7 @@ class BazelProtoLibrary(BaseBazelTarget):
         ret.append(")")
 
         return {self.name: ret}
+
 
 @total_ordering
 class BazelExternalDep(BaseBazelTarget):

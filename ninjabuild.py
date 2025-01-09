@@ -915,6 +915,14 @@ def genBazelBuildFiles(
     top_levels: list[BuildTarget], rootdir: str, prefix: str
 ) -> Dict[str, str]:
     bb = BazelBuild(prefix)
+    #FIXME don't hard code instead load it from a file
+    filename = f"{rootdir}/bazel/cpp/postprocessing.py"
+    if os.path.exists(filename):
+        sys.path.append(f"{rootdir}/bazel/cpp")
+        import postprocessing as pp # type: ignore
+        for e in pp.postProcessingList:
+            bb.addPostProcess(e[0], e[1], e[2])
+
     for e in sorted(top_levels):
         e.markTopLevel()
         genBazel(e, bb, rootdir)

@@ -51,6 +51,9 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
             ):
                 assert current is not None
                 current.setSharedLibrarys(cleanupVar(val))
+            if line.startswith("skip_wrapping = "):
+                assert current is not None
+                current.setSkipWrapping(val == "True")
             if line.startswith("static_library = "):
                 assert current is not None
                 current.setStaticLibrarys(cleanupVar(val))
@@ -76,6 +79,21 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
                 inflightVals = line.replace("deps = ", "").strip()
                 inflightComplete = False
                 if openParentesis == 0 or openBrackets == 0:
+                    inflightComplete = True
+            if line.startswith("includes = "):
+                assert current is not None
+                regex = r"([\[\]])"
+                openBrackets = 0
+                found = re.findall(regex, line)
+                for c in found:
+                    if c == "[":
+                        openBrackets += 1
+                    if c == "]":
+                        openBrackets -= 1
+                inflightAttr = "includes"
+                inflightVals = line.replace("includes = ", "").strip()
+                inflightComplete = False
+                if openBrackets == 0:
                     inflightComplete = True
             if line.startswith("hdrs = "):
                 assert current is not None

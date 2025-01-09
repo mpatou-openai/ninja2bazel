@@ -560,7 +560,7 @@ class Build:
                 includeDir = "This is wrong"
 
             if isinstance(ctx.current, BazelTarget):
-                logging.debug(f"Adding header {i} {includeDir}")
+                logging.debug(f"Adding header {i} {includeDir} to {ctx.current.name}")
                 ctx.current.addHdr(
                         cls._genExportedFile(i, ctx.current.location),
                         (includeDir, generated),
