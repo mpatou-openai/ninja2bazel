@@ -287,12 +287,6 @@ class NinjaParser:
                         ext = self._getBuildTarget(s).markAsExternal(quiet)
                     self.externals[s] = ext
                     inputs.append(ext)
-            # Massive hack: assume that files ending with .c/cc with a folder name third-party
-            # exists
-            elif (p.endswith(".c") or p.endswith(".cc") or p.endswith(".cpp")) and (
-                "third-party" in p
-            ):
-                inputs.append(BuildTarget(s, self.getShortName(s)).markAsFile())
             else:
                 v = self.all_outputs.get(s)
                 if not v:
@@ -595,7 +589,7 @@ class NinjaParser:
                         tmp = self.generatedFiles[shortedName]
                         # tmp is a tuple build / path where the generated file is stored
                         if tmp[1] is None:
-                            logging.info(f"Path for {tmp[0] is None} skipping")
+                            logging.info(f"Path for {tmp[0]} is None skipping")
                             continue
                         else:
                             filename = f"{tmp[1]}/{shortedName}"
