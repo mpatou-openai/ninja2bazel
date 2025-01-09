@@ -134,6 +134,7 @@ def main():
     print(f"Time to getBuildTargets: {end - start}", file=sys.stdout)
     start = time.time()
     logging.info("Generating Bazel BUILD files from buildTargets")
+    logging.info(f"There is {len(top_levels_targets)} top level targets")
     output = genBazelBuildFiles(top_levels_targets, rootdir, prefix)
     end = time.time()
     print(f"Time to generate Bazel's BUILD files: {end - start}", file=sys.stdout)

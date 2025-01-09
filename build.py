@@ -235,6 +235,16 @@ class BuildTarget:
         self.is_a_file = True
         return self
 
+    def isUsedBy(self, targetsName: list[str]) -> bool:
+        if len(self.usedbybuilds) == 0:
+            return False
+        count = 0
+        for e in self.usedbybuilds:
+            for b in e.outputs:
+                if str(b) in targetsName:
+                    count += 1
+        return count > 0
+
     def isOnlyUsedBy(self, targetsName: list[str]) -> bool:
         if len(self.usedbybuilds) == 0:
             return False
@@ -278,7 +288,7 @@ class BuildTarget:
         return False
 
     def visitGraph(self, visitor: VisitorType, ctx: VisitorContext):
-        # If we are visiting a target that is a file ord
+        # If we are visiting a target that is a file or
         # a target that is produced by something that is either not phony
         # of is phony but has real inputs / deps
         if self.is_a_file or not (

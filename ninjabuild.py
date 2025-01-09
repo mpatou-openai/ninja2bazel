@@ -94,6 +94,7 @@ class NinjaParser:
         self.externals: Dict[str, BuildTarget] = {}
         self.cacheHeaders: Dict[str, CPPIncludes] = {}
         self.generatedFilesLogged: Set[Tuple[str, str]] = set()
+        self.all_targets: Dict[str, BuildTarget] = {}
 
     def getShortName(
         self, name, workDir=None, generated=False
@@ -168,6 +169,14 @@ class NinjaParser:
         rule = Rule(arr[1])
         self.rules[rule.name] = rule
         rule.vars = vars
+
+
+    def _getBuildTarget(self, name: str) -> BuildTarget:
+        t = self.all_targets.get(name)
+        if not t:
+            t = BuildTarget(name, self.getShortName(name))
+            self.all_targets[name] = t
+        return t
 
     def _handleBuild(self, arr: List[str], vars: Dict[str, str]):
         """
@@ -258,13 +267,13 @@ class NinjaParser:
                     or realPath.startswith(self.codeRootDir)
                 ):
                     logging.debug(f"Marking {s} as an known dependency")
-                    inputs.append(BuildTarget(s, self.getShortName(s)).markAsFile())
+                    inputs.append(self._getBuildTarget(s).markAsFile())
                 else:
                     ext = self.externals.get(s)
                     if s in self.manually_generated:
                         logging.info(f"Marking {s} as a manually generated target")
                         m = self.manually_generated[s]
-                        mv = BuildTarget(m, self.getShortName(m))
+                        mv = self._getBuildTarget(m)
                         mv.markAsManual()
                         inputs.append(mv)
                         continue
@@ -275,7 +284,7 @@ class NinjaParser:
                         quiet = False
                         if s.endswith("CMakeLists.txt"):
                             quiet = True
-                        ext = BuildTarget(s, self.getShortName(s)).markAsExternal(quiet)
+                        ext = self._getBuildTarget(s).markAsExternal(quiet)
                     self.externals[s] = ext
                     inputs.append(ext)
             # Massive hack: assume that files ending with .c/cc with a folder name third-party
@@ -287,11 +296,11 @@ class NinjaParser:
             else:
                 v = self.all_outputs.get(s)
                 if not v:
-                    v = BuildTarget(s, self.getShortName(s))
+                    v = self._getBuildTarget(s)
                     if s in self.manually_generated:
                         logging.info(f"Marking {s} as a manually generated target")
                         m = self.manually_generated[s]
-                        v = BuildTarget(m, self.getShortName(m))
+                        v = self._getBuildTarget(m)
                         v.markAsManual()
                     else:
                         v.markAsUnknown()
@@ -313,7 +322,7 @@ class NinjaParser:
             v = self.all_outputs.get(d)
             if not v:
                 try:
-                    v = BuildTarget(d, self.getShortName(d))
+                    v = self._getBuildTarget(d)
                 except Exception as _:
                     logging.error("Couldn't find a target for {d}")
                     raise
@@ -561,6 +570,7 @@ class NinjaParser:
             self.cacheHeaders[f] = cppIncludes
 
     def _finalizeHeadersForNonGeneratedFiles(self, current_dir: str):
+        logging.info(f"There are {len(self.all_outputs.values())} outputs")
         for t in self.all_outputs.values():
             build = t.producedby
             if not build:
@@ -813,35 +823,11 @@ class NinjaParser:
 
 
 def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
-    real_top_targets = []
-    for o in parser.all_outputs.values():
-        if o.isOnlyUsedBy(["all"]):
-            real_top_targets.append(o)
-            # logging.debug(f"{o} produced by {o.producedby.rulename}")
-            continue
-        if str(o) in IGNORED_TARGETS or o.isOnlyUsedBy(IGNORED_TARGETS):
-            continue
-        if o.producedby is not None and o.producedby.rulename.name == "phony":
-            # Look at all the phony build outputs
-            # if all their inputs are used in another build then it's kind of an alias
-            # and so it's not a top level build
-            count = 0
-            for i in o.producedby.inputs:
-                if len(i.usedbybuilds) != 0:
-                    count += 1
-            if count == len(o.producedby.inputs):
-                continue
-        if (
-            len(o.usedbybuilds) == 0
-            and not o.implicit
-            and not str(o).endswith("_tests.cmake")
-        ):
-            logging.warning(f"{o} used by no one")
-            # logging.debug(f"{o} produced by {o.producedby.rulename.name}")
-            real_top_targets.append(o)
-
-    return real_top_targets
-
+    b = parser.all_outputs["all"].producedby
+    if b is None:
+        logging.error("Couldn't find a build for all")
+        return []
+    return b.inputs
 
 def _printNiceDict(d: dict[str, Any]) -> str:
     return "".join([f"  {k}: {v}\n" for k, v in d.items()])
@@ -892,6 +878,7 @@ def getBuildTargets(
         return []
 
     top_levels = getToplevels(parser)
+    logging.info(f"Found {len(top_levels)} top levels")
     parser.finalizeHeaders(dir)
     return top_levels
 
