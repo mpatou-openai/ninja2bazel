@@ -1019,69 +1019,7 @@ class Build:
             self._handleCPPLinkCommand(el, cmd, ctx)
             return
         if self.isCPPCommand(cmd) and "-c" in cmd:
-            if ctx.current is None:
-                # Usually when it's none it's because we have pseudo targets
-                return
-            assert ctx.current is not None
-            assert isinstance(ctx.current, BazelTarget)
-            build = el.producedby
-            assert build is not None
-            workDir = self.vars.get("cmake_ninja_workdir", "")
-
-            for define in self.vars.get("DEFINES", "").split(" "):
-                ctx.current.addDefine(f'"{define[2:]}"')
-
-            for flag in self.vars.get("FLAGS", "").split(" "):
-                keep = True
-                if flag.startswith("-D"):
-                    ctx.current.addDefine(f'"{flag[2:]}"')
-                    keep = False
-                    continue
-                if flag.startswith("-std="):
-                    # Let's not keep the c++ standard flag
-                    keep = False
-                if flag == "-g":
-                    # Let's not keep the debug flag
-                    keep = False
-                if flag.startswith("-O"):
-                    # Let's not keep the optimization flag
-                    keep = False
-                if flag.startswith("-march"):
-                    # Let's not keep the architecture flag
-                    keep = False
-                if flag.startswith("-mtune"):
-                    # Let's not keep the architecture tunning flag
-                    keep = False
-                if flag.startswith("-fPIC"):
-                    # Let's not keep the optimization flag
-                    keep = False
-                # Maybe some flags like -fdebug-info-for-profiling
-                if keep:
-                    logging.debug(f"Adding flag {flag} to copt into {ctx.current.name}")
-                    ctx.current.addCopt(f'"{flag}"')
-
-            for i in build.inputs:
-                # Most of it it dealt by HandleFileForBazel
-                if i.type == TargetType.manually_generated:
-                    continue
-                if i.is_a_file:
-                    continue
-                if i.producedby is not None:
-                    logging.debug(
-                        f"Skipping produced {i} to find includes, it should be dealt by its build"
-                    )
-                    continue
-
-            assert len(self.outputs) == 1
-            if ".grpc.pb.cc.o" in self.outputs[0].name:
-                self._handleGRPCCCProtobuf(ctx, el)
-            elif ".pb.cc.o" in self.outputs[0].name:
-                # protobuf
-                self._handleCCProtobuf(ctx, el)
-            else:
-                ctx.next_dest = ctx.current
-                # compilation of a source file to an object file, this is taken care by
-                # bazel targets like cc_binary or cc_library
+            self._handleCPPCompileCommand(ctx, el)
             return
         if self.isCPPCommand(cmd):
             self._handleCPPLinkExecutableCommand(el, cmd, ctx)
@@ -1096,6 +1034,69 @@ class Build:
             ctx.bazelbuild.bazelTargets.add(t)
             return
         logging.warn(f"Don't know how to handle {cmd} for {el}")
+
+    def _handleCPPCompileCommand(self, ctx: BazelBuildVisitorContext, el: BuildTarget):
+        if ctx.current is None:
+            # Usually when it's none it's because we have pseudo targets
+            return
+        assert isinstance(ctx.current, BazelTarget)
+        build = el.producedby
+        assert build is not None
+
+        for define in self.vars.get("DEFINES", "").split(" "):
+            ctx.current.addDefine(f'"{define[2:]}"')
+
+        for flag in self.vars.get("FLAGS", "").split(" "):
+            keep = True
+            if flag.startswith("-D"):
+                ctx.current.addDefine(f'"{flag[2:]}"')
+                keep = False
+                continue
+            if flag.startswith("-std="):
+                # Let's not keep the c++ standard flag
+                keep = False
+            if flag == "-g":
+                # Let's not keep the debug flag
+                keep = False
+            if flag.startswith("-O"):
+                # Let's not keep the optimization flag
+                keep = False
+            if flag.startswith("-march"):
+                # Let's not keep the architecture flag
+                keep = False
+            if flag.startswith("-mtune"):
+                # Let's not keep the architecture tunning flag
+                keep = False
+            if flag.startswith("-fPIC"):
+                # Let's not keep the optimization flag
+                keep = False
+            # Maybe some flags like -fdebug-info-for-profiling
+            if keep:
+                logging.debug(f"Adding flag {flag} to copt into {ctx.current.name}")
+                ctx.current.addCopt(f'"{flag}"')
+
+        for i in build.inputs:
+            # Most of it it dealt by HandleFileForBazel
+            if i.type == TargetType.manually_generated:
+                continue
+            if i.is_a_file:
+                continue
+            if i.producedby is not None:
+                logging.debug(
+                    f"Skipping produced {i} to find includes, it should be dealt by its build"
+                )
+                continue
+
+        assert len(self.outputs) == 1
+        if ".grpc.pb.cc.o" in self.outputs[0].name:
+            self._handleGRPCCCProtobuf(ctx, el)
+        elif ".pb.cc.o" in self.outputs[0].name:
+            # protobuf
+            self._handleCCProtobuf(ctx, el)
+        else:
+            ctx.next_dest = ctx.current
+            # compilation of a source file to an object file, this is taken care by
+            # bazel targets like cc_binary or cc_library
 
     def __repr__(self) -> str:
         return (
