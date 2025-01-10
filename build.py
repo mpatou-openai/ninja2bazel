@@ -44,9 +44,7 @@ class BazelBuildVisitorContext(VisitorContext):
     rootdir: str
     bazelbuild: BazelBuild
     current: Optional[BaseBazelTarget] = None
-    dest: Optional[BaseBazelTarget] = None
     producer: Optional["Build"] = None
-    next_dest: Optional[BaseBazelTarget] = None
     next_current: Optional[BaseBazelTarget] = None
     currentBuild: Optional["Build"] = None
 
@@ -59,7 +57,7 @@ class BazelBuildVisitorContext(VisitorContext):
         return newCtx
 
     def cleanup(self):
-        self.next_dest = None
+        pass
 
 
 class BuildFileGroupingStrategy:
@@ -603,9 +601,10 @@ class Build:
     @classmethod
     def handlePhonyForBazelGen(
         cls, ctx: BazelBuildVisitorContext, el: "BuildTarget", build: "Build"
-    ):
+    ) -> bool:
         if ctx.current is None:
             logging.debug(f"{el} is a phony target")
+        return True
 
     @classmethod
     def isCPPCommand(cls, cmd: str) -> bool:
@@ -629,7 +628,7 @@ class Build:
 
     def _handleProtobufForBazelGen(
         self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
-    ):
+    ) -> bool:
         assert ctx.current is not None
         arr = el.name.split(os.path.sep)
         filename = arr[-1]
@@ -638,7 +637,7 @@ class Build:
         match = re.match(regex, filename)
         if not match:
             logging.info("not a match")
-            return
+            return True
         proto = match.group(1)
         if match.group(2) is None:
             grpc = False
@@ -661,7 +660,7 @@ class Build:
             ctx.current = savedCurrent
             ctx.next_current = savedCurrent
             # Maybe we still want to continue ... tbd
-            return
+            return True
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         t = getObject(BazelProtoLibrary, f"{proto}_proto", location)
         ctx.bazelbuild.bazelTargets.add(t)
@@ -690,6 +689,7 @@ class Build:
         elif isinstance(ctx.current, BazelCCProtoLibrary):
             ctx.current.addDep(tmp)
         ctx.current = tmp
+        return True
 
     def canGenerateFinal(self) -> bool:
         ret = self.getCoreCommand()
@@ -705,7 +705,7 @@ class Build:
 
     def _handleCustomCommandForBazelGen(
         self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
-    ):
+    ) -> bool:
         if self.associatedBazelTarget is None:
             name = el.shortName.replace("/", "_").replace(".", "_")
 
@@ -883,6 +883,7 @@ class Build:
                 logging.warn(f"No dest for custom command: {el}")
                 [ctx.current.addDep(o) for o in outs]
         ctx.current = genTarget
+        return True
 
     def _handleGRPCCCProtobuf(self, ctx: BazelBuildVisitorContext, el: BuildTarget):
         assert ctx.current is not None
@@ -934,7 +935,7 @@ class Build:
 
     def _handleCPPLinkExecutableCommand(
         self, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
-    ):
+    ) -> bool:
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         if self.associatedBazelTarget is None:
             t = getObject(BazelTarget, "cc_binary", el.name, location)
@@ -950,11 +951,12 @@ class Build:
         if ctx.current is not None:
             ctx.current.addDep(t)
         ctx.current = nextCurrent
-        return
+        return True
 
     def _handleCPPLinkCommand(
         self, el: BuildTarget, cmd: str, ctx: BazelBuildVisitorContext
-    ):
+    ) -> bool:
+        continueVisit = True
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         if self.associatedBazelTarget is None:
             if self.vars.get("SONAME") is not None:
@@ -996,18 +998,21 @@ class Build:
             nextCurrent = tmp
             # Bazel wants only libraries not shared as dependencies
             t = tmp
+            # Revisiting the same target, we don't need to visit its dependencies
+            continueVisit = False
 
         if ctx.current is not None:
             ctx.current.addDep(t)
-        ctx.current = nextCurrent
-        return
+        if continueVisit:
+            ctx.current = nextCurrent
+        return continueVisit
 
     def handleRuleProducedForBazelGen(
         self,
         ctx: BazelBuildVisitorContext,
         el: "BuildTarget",
         cmd: str,
-    ):
+    ) -> bool:
 
         if self.rulename.name == "CUSTOM_COMMAND" and "bin/protoc" in self.vars.get(
             "COMMAND", ""
@@ -1016,14 +1021,11 @@ class Build:
         if self.rulename.name == "CUSTOM_COMMAND":
             return self._handleCustomCommandForBazelGen(ctx, el, cmd)
         if self.isCPPCommand(cmd) and self.vars.get("LINK_FLAGS") is not None:
-            self._handleCPPLinkCommand(el, cmd, ctx)
-            return
+            return self._handleCPPLinkCommand(el, cmd, ctx)
         if self.isCPPCommand(cmd) and "-c" in cmd:
-            self._handleCPPCompileCommand(ctx, el)
-            return
+            return self._handleCPPCompileCommand(ctx, el)
         if self.isCPPCommand(cmd):
-            self._handleCPPLinkExecutableCommand(el, cmd, ctx)
-            return
+            return self._handleCPPLinkExecutableCommand(el, cmd, ctx)
         if self.isStaticArchiveCommand(cmd):
             assert len(self.outputs) == 1
             location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
@@ -1032,13 +1034,15 @@ class Build:
                 ctx.current.addDep(t)
             ctx.current = t
             ctx.bazelbuild.bazelTargets.add(t)
-            return
-        logging.warn(f"Don't know how to handle {cmd} for {el}")
+            return True
 
-    def _handleCPPCompileCommand(self, ctx: BazelBuildVisitorContext, el: BuildTarget):
+        logging.warn(f"Don't know how to handle {cmd} for {el}")
+        return False
+
+    def _handleCPPCompileCommand(self, ctx: BazelBuildVisitorContext, el: BuildTarget) -> bool:
         if ctx.current is None:
             # Usually when it's none it's because we have pseudo targets
-            return
+            return True
         assert isinstance(ctx.current, BazelTarget)
         build = el.producedby
         assert build is not None
@@ -1094,9 +1098,10 @@ class Build:
             # protobuf
             self._handleCCProtobuf(ctx, el)
         else:
-            ctx.next_dest = ctx.current
+            ctx.next_current = ctx.current
             # compilation of a source file to an object file, this is taken care by
             # bazel targets like cc_binary or cc_library
+        return True
 
     def __repr__(self) -> str:
         return (

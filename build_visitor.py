@@ -25,13 +25,13 @@ class BuildVisitor:
         ctx: BazelBuildVisitorContext,
         el: "BuildTarget",
         build: "Build",
-    ):
+    ) -> bool:
         if build.rulename.name != "phony":
             if len(el.usedbybuilds) == 0:
                 logging.warning(
                     f"Skipping non phony top level target that is not used by anything: {el}"
                 )
-                return
+                return False
             rawCmd = build.getCoreCommand()
 
             if rawCmd is None and build.rulename.name != "CUSTOM_COMMAND":
@@ -39,15 +39,18 @@ class BuildVisitor:
                 logging.warning(
                     f"Didn't find a valid command in {build.getRawcommand()}"
                 )
-                return
+                return False
             assert rawCmd is not None
             # We don't care about the directory where the command should run when generating
             # bazel command, in theory it should already be baked in the command itself
             (cmd, _) = rawCmd
-            build.handleRuleProducedForBazelGen(ctx, el, cmd)
+            return build.handleRuleProducedForBazelGen(ctx, el, cmd)
         elif build.rulename.name == "phony":
             logging.info(f"Handling phony {build.outputs[0]}")
-            build.handlePhonyForBazelGen(ctx, el, build)
+            return build.handlePhonyForBazelGen(ctx, el, build)
+        else:
+            assert False
+            return False
 
     @classmethod
     def getVisitor(cls) -> VisitorType:
@@ -71,14 +74,12 @@ class BuildVisitor:
                 return False
             if el.producedby is not None:
                 build = el.producedby
-                BuildVisitor.visitProduced(ctx, el, build)
-                return True
+                return BuildVisitor.visitProduced(ctx, el, build)
             else:
                 if el.type == TargetType.manually_generated:
                     Build.handleManuallyGeneratedForBazelGen(ctx, el)
                     return True
                 Build.handleFileForBazelGen(el, ctx)
                 return True
-            return True
 
         return visitor
