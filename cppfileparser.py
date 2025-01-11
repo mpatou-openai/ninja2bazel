@@ -100,10 +100,15 @@ def _findCPPIncludeForFile(
             found = True
             break
 
+        if found and os.path.exists(full_file_name2):
+            logging.debug(f"Found {file} in the compiler include path: {cdir} skipping")
+            break
+
+
         if not os.path.exists(full_file_name) or os.path.isdir(full_file_name):
             continue
 
-        logging.debug(f"Found {file} in the includes variable")
+        logging.debug(f"Found {file} in the includes variable using {d}")
         # Check if the file is part of the cc_imports as we don't want to recurse for headers there
         for imp in cc_imports:
             if full_file_name in imp.hdrs:
@@ -192,9 +197,7 @@ def findCPPIncludes(
                 logging.debug(
                     f"Found {file} in the same directory as the looked file generated {generated}"
                 )
-                # Not sure if it's actually a good idea to use realpath
                 # We need a way of dealing with path with ..
-                # full_file_name = os.path.realpath(full_file_name)
                 full_file_name = resolvePath(full_file_name)
                 # Current file is generated so we are in some /tmp/tmpxxbbcc path and
                 # in this path we find `file` so it's safe to return "/generated"

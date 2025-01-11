@@ -990,6 +990,7 @@ class Build:
         continueVisit = True
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         if self.associatedBazelTarget is None:
+            logging.info(f"Creating cc_library/cc_binary for {el.name}")
             if self.vars.get("SONAME") is not None:
                 staticLibTarget = getObject(
                     BazelTarget,
