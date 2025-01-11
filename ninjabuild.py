@@ -56,7 +56,7 @@ def _copyFilesBackNForth(sourceDir, destDir):
 
 
 def isCPPLikeFile(name: str) -> bool:
-    for e in [".cc", ".cpp", ".h", ".hpp"]:
+    for e in [".c", ".cc", ".cpp", ".h", ".hpp"]:
         if name.endswith(e):
             return True
 
