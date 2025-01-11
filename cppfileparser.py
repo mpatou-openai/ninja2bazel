@@ -25,7 +25,7 @@ seen = set()
 
 @dataclass
 class CPPIncludes:
-    foundHeaders: Set[Tuple[str, str]]
+    foundHeaders: Set[Tuple[str, Optional[str]]]
     notFoundHeaders: Set[str]
     neededImports: Set[BazelCCImport]
     neededGeneratedFiles: Set[Tuple[str, Optional[str]]]
@@ -220,7 +220,7 @@ def findCPPIncludes(
                             f"Could not find {full_file_name} in the generated files"
                         )
                 else:
-                    ret.foundHeaders.add((full_file_name, current_dir))
+                    ret.foundHeaders.add((full_file_name, None))
                 cppIncludes = findCPPIncludes(
                     full_file_name,
                     includes_dirs,

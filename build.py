@@ -17,6 +17,7 @@ TargetType = Enum(
     "TargetType", ["other", "unknown", "known", "external", "manually_generated"]
 )
 
+
 def genShBinaryScript(rootdir: str, command: str) -> str:
     return f"""
 echo -ne '#!/bin/bash \\n\\
@@ -101,8 +102,8 @@ class TopLevelGroupingStrategy(BuildFileGroupingStrategy):
 
     def getBuildFilenamePath(self, element: "BuildTarget") -> str:
         if element.location is not None:
-            return element.location.split('/')[0]
-        
+            return element.location.split("/")[0]
+
         return self.getBuildFilenamePathFromFilename(element.shortName)
 
     def getBuildFilenamePathFromFilename(self, filename: str) -> str:
@@ -143,7 +144,7 @@ class BuildTarget:
         implicit: bool = False,
     ):
         self.name = name
-        (self.shortName,self.location) = shortName
+        (self.shortName, self.location) = shortName
         self.implicit = implicit
         self.producedby: Optional["Build"] = None
         self.usedbybuilds: List["Build"] = []
@@ -400,8 +401,10 @@ class Build:
         if not ef:
             keepPrefix = False
             if fileLocation is None:
-                fileLocation = BuildFileGroupingStrategy().getBuildFilenamePathFromFilename(
-                    filename
+                fileLocation = (
+                    BuildFileGroupingStrategy().getBuildFilenamePathFromFilename(
+                        filename
+                    )
                 )
             else:
                 keepPrefix = True
@@ -423,7 +426,11 @@ class Build:
         el: "BuildTarget",
         ctx: BazelBuildVisitorContext,
     ):
-        if el.type == TargetType.external and el.opaque is None and not el.name.endswith("/protoc"):
+        if (
+            el.type == TargetType.external
+            and el.opaque is None
+            and not el.name.endswith("/protoc")
+        ):
             logging.info(
                 f"Dealing with external dep {el.name} that doesn't have an opaque"
             )
@@ -437,8 +444,14 @@ class Build:
                     if isinstance(dep, BazelCCImport):
                         if dep.name == "protobuf":
                             logging.info("Adding any_cc_proto")
-                            any_proto = getObject(BazelExternalDep, "any_proto", "@com_google_protobuf//")
-                            any_cc_proto = getObject(BazelCCProtoLibrary, "any_cc_proto", ctx.current.location)
+                            any_proto = getObject(
+                                BazelExternalDep, "any_proto", "@com_google_protobuf//"
+                            )
+                            any_cc_proto = getObject(
+                                BazelCCProtoLibrary,
+                                "any_cc_proto",
+                                ctx.current.location,
+                            )
                             any_cc_proto.addDep(any_proto)
                             ctx.current.addDep(any_cc_proto)
                             ctx.bazelbuild.bazelTargets.add(any_cc_proto)
@@ -466,8 +479,12 @@ class Build:
                 # so we don't need to add it here but we still create a library for any.pb.h
                 if maybe_cc_import.name == "protobuf":
                     logging.info("Adding any_cc_proto")
-                    any_proto = getObject(BazelExternalDep, "any_proto", "@com_google_protobuf//")
-                    any_cc_proto = getObject(BazelCCProtoLibrary, "any_cc_proto", ctx.current.location)
+                    any_proto = getObject(
+                        BazelExternalDep, "any_proto", "@com_google_protobuf//"
+                    )
+                    any_cc_proto = getObject(
+                        BazelCCProtoLibrary, "any_cc_proto", ctx.current.location
+                    )
                     any_cc_proto.addDep(any_proto)
                     ctx.current.addDep(any_cc_proto)
                     ctx.bazelbuild.bazelTargets.add(any_cc_proto)
@@ -539,13 +556,13 @@ class Build:
 
     @classmethod
     def _handleIncludeBazelTarget(
-            cls,
-            el: "BuildTarget",
-            ctx: BazelBuildVisitorContext,
-            workDir: str|None):
+        cls, el: "BuildTarget", ctx: BazelBuildVisitorContext, workDir: str | None
+    ):
         for i, d in el.includes:
             generated = False
-            if d.startswith(ctx.rootdir):
+            if d is None:
+                includeDir = None
+            elif d.startswith(ctx.rootdir):
                 includeDir = d.replace(ctx.rootdir, "")
             elif workDir is not None and d.startswith(workDir):
                 includeDir = d.replace(workDir, "")
@@ -554,13 +571,15 @@ class Build:
                 generated = True
                 includeDir = d.replace("/generated", "")
                 ctx.current.addIncludeDir((includeDir, True))  # type: ignore
-                    # add to the neededGeneratedFiles for this bazelTarget so that
-                    # when we process the buildTarget for the needed generated file we know where we need
-                    # to add it as a include
+                # add to the neededGeneratedFiles for this bazelTarget so that
+                # when we process the buildTarget for the needed generated file we know where we need
+                # to add it as a include
                 ctx.current.addNeededGeneratedFiles(i)  # type: ignore
-                logging.info(f"Skipping adding generated header {i} -I {includeDir} in {el}")
-                    # Do not add the header to the list of headers to the bazel build object, this will be done
-                    # when we will visit the build object for the generated files
+                logging.info(
+                    f"Skipping adding generated header {i} -I {includeDir} in {el}"
+                )
+                # Do not add the header to the list of headers to the bazel build object, this will be done
+                # when we will visit the build object for the generated files
                 continue
             else:
                 # This should never be visited
@@ -568,15 +587,20 @@ class Build:
                 includeDir = "This is wrong"
 
             if isinstance(ctx.current, BazelTarget):
-                logging.debug(f"Adding header {i} {includeDir} to {ctx.current.name}")
-                ctx.current.addHdr(
+                logging.info(
+                    f"Adding header {i} using include {includeDir} from {el.name} {generated} to {ctx.current.name}"
+                )
+                if includeDir is not None:
+                    ctx.current.addHdr(
                         cls._genExportedFile(i, ctx.current.location),
                         (includeDir, generated),
                     )
+                else:
+                    ctx.current.addHdr(cls._genExportedFile(i, ctx.current.location))
             else:
                 logging.warn(
-                        f"{i} is a header file but {ctx.current} is not a BazelTarget that can have headers"
-                    )
+                    f"{i} is a header file but {ctx.current} is not a BazelTarget that can have headers"
+                )
 
     @classmethod
     def handleManuallyGeneratedForBazelGen(
@@ -757,7 +781,11 @@ class Build:
             alteredArgs = []
             command = arr[0]
             firstOutput = sorted(list(outFiles))[0]
-            outputDir = f"$$(dirname $(location {firstOutput}))/"+f'{"/".join([ ".." for d in firstOutput.split("/")[:-1]])}'+'/'
+            outputDir = (
+                f"$$(dirname $(location {firstOutput}))/"
+                + f'{"/".join([ ".." for d in firstOutput.split("/")[:-1]])}'
+                + "/"
+            )
             lastArgIsOption = False
             for arg in arr[1:]:
                 if arg.startswith("-"):
@@ -783,17 +811,22 @@ class Build:
                     inputName = inFile.name.replace(f"{ctx.rootdir}", "")
                     logging.info(f"Checking {inputName} against {arg} {ctx.rootdir}")
                     if inputName == arg:
-                        inputLocation = BuildFileGroupingStrategy().getBuildFilenamePathFromFilename(inputName)
-                        inputFileTarget = BuildFileGroupingStrategy().getBuildTarget(inputName, genTarget.location)
+                        inputLocation = BuildFileGroupingStrategy().getBuildFilenamePathFromFilename(
+                            inputName
+                        )
+                        inputFileTarget = BuildFileGroupingStrategy().getBuildTarget(
+                            inputName, genTarget.location
+                        )
                         countRewrote += 1
                         if inputLocation != genTarget.location:
-                            alteredArgs.append(f"$(location //{inputLocation}{inputFileTarget})")
+                            alteredArgs.append(
+                                f"$(location //{inputLocation}{inputFileTarget})"
+                            )
                         else:
                             alteredArgs.append(f"$(location {inputFileTarget})")
 
                         found = True
                         break
-
 
                 if lastArgIsOption and not found:
                     # assume that this argument is an option for the last option
@@ -809,7 +842,7 @@ class Build:
                         logging.info(f"{arg} not found in the output hope it's ok")
                     alteredArgs.append(arg)
             # toolBuildTarget is a genrule() rule for building the tool that will be used by the shell
-            # script that is used for producing the output of the custom command 
+            # script that is used for producing the output of the custom command
             toolBuildTarget = getObject(
                 BazelGenRuleTarget, f"{name}_cmd_build", location
             )
@@ -829,9 +862,7 @@ class Build:
             shBinary = ShBinaryBazelTarget(f"{name}_cmd", location)
             shBinary.addSrc(toolBuildTarget)
             genTarget.cmd = (
-                f"./$(location {shBinary.targetName()})"
-                + " "
-                + " ".join(alteredArgs)
+                f"./$(location {shBinary.targetName()})" + " " + " ".join(alteredArgs)
             )
             genTarget.addTool(shBinary)
 
@@ -869,7 +900,7 @@ class Build:
                     assert isinstance(ctx.current, BazelTarget)
                     if len(el.includes) == 0:
                         ctx.current.addHdr(t)
-                # The current buildTarget is a C/C++ file it means that the current build (ie. binary/test/lib) 
+                # The current buildTarget is a C/C++ file it means that the current build (ie. binary/test/lib)
                 # has it as input, so we add it as a src to the current bazelTarget
                 if (
                     t.name.endswith(".c")
@@ -970,7 +1001,7 @@ class Build:
                 t = getObject(
                     BazelTarget,
                     "cc_shared_library",
-                    "shared_"+el.shortName.replace("/", "_"),
+                    "shared_" + el.shortName.replace("/", "_"),
                     location,
                 )
 
@@ -1039,7 +1070,9 @@ class Build:
         logging.warn(f"Don't know how to handle {cmd} for {el}")
         return False
 
-    def _handleCPPCompileCommand(self, ctx: BazelBuildVisitorContext, el: BuildTarget) -> bool:
+    def _handleCPPCompileCommand(
+        self, ctx: BazelBuildVisitorContext, el: BuildTarget
+    ) -> bool:
         if ctx.current is None:
             # Usually when it's none it's because we have pseudo targets
             return True
@@ -1109,8 +1142,8 @@ class Build:
             + f"{' '.join([str(i) for i in self.depends])} => "
             f"{self.rulename.name} => {' '.join([str(i) for i in self.outputs])}"
         )
-    
-    @property 
+
+    @property
     def name(self) -> str:
         return f"{self.outputs[-1]}_{self.rulename.name}"
 
