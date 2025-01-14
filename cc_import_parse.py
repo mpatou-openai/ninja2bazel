@@ -124,23 +124,26 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
             assert current is not None
             inflightComplete = False
             vals = []
-            for v in inflightVals.split(","):
+            for v in inflightVals.split("\n"):
                 val = v.strip()
+                if val.endswith(","):
+                    val = val[:-1]
                 if val.startswith("glob("):
                     vals.extend(parse_glob(val))
                 else:
-                    if len(val) == 0:
-                        continue
-                    if val[0] == "[":
-                        val = val[1:]
-                    if val[-1] == "]":
-                        val = val[:-1]
-                    val = val.strip()
-                    # replace quotes ...
-                    val = val.replace('"', "").replace("'", "")
-                    if len(val) > 0 and val[0] == ":":
-                        val = val[1:]
-                    vals.append(val)
+                    for subVal in val.split(","):
+                        if len(subVal) == 0:
+                            continue
+                        if subVal[0] == "[":
+                            subVal = subVal[1:]
+                        if val[-1] == "]":
+                            subVal = subVal[:-1]
+                        subVal = subVal.strip()
+                        # replace quotes ...
+                        subVal =subVal.replace('"', "").replace("'", "")
+                        if len(subVal) > 0 and subVal[0] == ":":
+                            subVal = subVal[1:]
+                        vals.append(subVal)
             setattr(current, inflightAttr, vals)
 
     return imports

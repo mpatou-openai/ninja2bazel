@@ -39,8 +39,8 @@ def findCommonPaths(paths: List[str]) -> List[str]:
     return ret
 
 
-def globifyPath(path: str) -> str:
-    return f"{path}/**/*.h"
+def globifyPath(path: str, ext: str) -> str:
+    return f"{path}/**/*.{ext}"
 
 
 class BazelCCImport:
@@ -107,21 +107,34 @@ class BazelCCImport:
 
     def asBazel(self) -> BazelTargetStrings:
         output = {}
-        dirs = []
+        dirs: Set[str] = set()
         val = "[]"
         if len(self.hdrs) > 1:
-            common = sorted(findCommonPaths(self.hdrs))
-            globs = [f'"_{globifyPath(c)[1:]}"' for c in common]
-            dirs = [f'"_{c[1:]}"' for c in common]
+            # let's iterate on self.hdrs and put the files with the same suffix in the same array
+            byExt : Dict[str, List[str]] = {}
+            globs = []
+            for h in self.hdrs:
+                ext = h.split(".")[-1]
+                if ext not in byExt:
+                    byExt[ext] = []
+                byExt[ext].append(h)
+
+            for k, v in byExt.items():
+                common = sorted(findCommonPaths(v))
+                globs.extend([f'"_{globifyPath(c, k)[1:]}"' for c in common])
+                for c in common:
+                    dirs.add(f'"_{c[1:]}"')
             val = f' glob([{",".join(globs)}])'
+
         elif len(self.hdrs) == 1 and len(self.hdrs[0]) > 0:
             val = f'["_{self.hdrs[0][1:]}"]'
-            v = f"_{'/'.join(self.hdrs[0][1:].split(os.path.sep)[:-1])}"
-            if v != "_usr/include" and v != "_usr/local/include":
-                dirs = [f'"{v}"']
+            v2 = f"_{'/'.join(self.hdrs[0][1:].split(os.path.sep)[:-1])}"
+            if v2 != "_usr/include" and v2 != "_usr/local/include":
+                dirs = set([f'"{v2}"'])
+
         # Overide the dirs if includes was specified on the cc_import
         if self.includes is not None:
-            dirs = [f'"_{d[1:]}"' for d in self.includes]
+            dirs = set([f'"_{d[1:]}"' for d in self.includes])
 
         ret = []
         if not self.skipWrapping:
