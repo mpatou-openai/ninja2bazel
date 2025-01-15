@@ -134,7 +134,7 @@ class BazelCCImport:
 
         # Overide the dirs if includes was specified on the cc_import
         if self.includes is not None:
-            dirs = set([f'"_{d[1:]}"' for d in self.includes])
+            dirs = set([f'"_{d[1:]}"' for d in sorted(self.includes)])
 
         ret = []
         if not self.skipWrapping:

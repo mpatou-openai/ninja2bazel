@@ -93,7 +93,7 @@ class NinjaParser:
         self.ran: Set[Tuple[str, str]] = set()
         self.externals: Dict[str, BuildTarget] = {}
         self.cacheHeaders: Dict[str, CPPIncludes] = {}
-        self.generatedFilesLogged: Set[Tuple[str, str]] = set()
+        self.generatedFilesLogged: Set[Tuple[str, Optional[str]]] = set()
         self.all_targets: Dict[str, BuildTarget] = {}
 
     def getShortName(
@@ -171,10 +171,12 @@ class NinjaParser:
         rule.vars = vars
 
 
-    def _getBuildTarget(self, name: str) -> BuildTarget:
+    def _getBuildTarget(self, name: str, shortName: Optional[Tuple[str, Optional[str]]] = None) -> BuildTarget:
         t = self.all_targets.get(name)
         if not t:
-            t = BuildTarget(name, self.getShortName(name))
+            if not shortName:
+                shortName = self.getShortName(name)
+            t = BuildTarget(name, shortName)
             self.all_targets[name] = t
         return t
 
@@ -550,7 +552,9 @@ class NinjaParser:
                     name = self.getShortName(
                         h[0].replace(tempTopFolder, workDir), workDir
                     )
-                    includeDir = h[1].replace(tempTopFolder, "/generated")
+                    includeDir = h[1]
+                    if includeDir is not None:
+                        includeDir = includeDir.replace(tempTopFolder, "/generated")
                     allIncludes.append((name[0], includeDir))
                 # We make the decision to not deal with generated files that are needed by other
                 # generated files
@@ -574,6 +578,7 @@ class NinjaParser:
             if build.rulename.name == "phony":
                 # We don't want to deal with phony targets
                 continue
+            # FIXME think about deduping here 
             for i in build.inputs:
                 generated = False
                 filename = None
@@ -682,19 +687,33 @@ class NinjaParser:
                             includes_dirs.update(matches)
 
                     protos = findProtoIncludes(i.name, includes_dirs)
-                    includesFiles = []
-                    for p in protos:
-                        if p[1] == "@":
-                            tgtname = f"@{p[0]}"
-                            logging.debug(f"Adding external dependency {tgtname}")
-                            dep = BuildTarget(tgtname, (tgtname, None)).markAsExternal()
-                            i.addDeps(dep)
+                    logging.info(f"Found proto includes {protos} for {i.name}")
+                    for f, deps in protos.items():
+                        # FIrst create build target for f if it didn't exists already
+                        if f != i.name:
+                            tgt = self._getBuildTarget(f)
                         else:
-                            (f, _) = self.getShortName(p[0], workDir)
-                            (d, _) = self.getShortName(p[1], workDir)
-                            f = f.replace(d + os.path.sep, "")
-                            includesFiles.append((f, d))
-                    i.setIncludedFiles(includesFiles)
+                            tgt = i
+                        for p in deps:
+                            if p[1] == "@":
+                                tgtname = f"@{p[0]}"
+                                logging.debug(f"Adding external dependency {tgtname}")
+                                dep = self._getBuildTarget(tgtname, (tgtname, None))
+                                dep.markAsExternal()
+                                tgt.addDeps(dep)
+                            else:
+                                # p[1] is the include path that was able to find this file
+                                # ie. /opt/code/project/cpp/proto
+                                # and d will be the delta with the work directory (ie. /opt/code/project/) so 
+                                # somthing like cpp/proto
+                                # it's important to know the delta because when calling protoc bazel won't let you provide
+                                # the values for -I and 
+                                (d, _) = self.getShortName(p[1], workDir)
+                                logging.debug(f"Adding internal dependency {p[0]} to {f} ({tgt.name}) delta directory: {d}")
+                                dep = self._getBuildTarget(p[0])
+                                tgt.addDeps(dep)
+                                #(f, _) = self.getShortName(p[0], workDir)
+                                #f = f.replace(d + os.path.sep, "")
             # TODO revisit if we need to extend the inputs o: the dependencies of the build
             # dependencies might have a side effect that is not desirable for generated files
             build.inputs.extend(list(generatedOutputsNeeded))
