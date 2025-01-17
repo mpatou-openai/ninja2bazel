@@ -95,6 +95,7 @@ class NinjaParser:
         self.cacheHeaders: Dict[str, CPPIncludes] = {}
         self.generatedFilesLogged: Set[Tuple[str, Optional[str]]] = set()
         self.all_targets: Dict[str, BuildTarget] = {}
+        self.cc_imports: List[BuildTarget] = []
 
     def getShortName(
         self, name, workDir=None, generated=False
@@ -308,7 +309,7 @@ class NinjaParser:
             for l in vars["LINK_LIBRARIES"].split(" "):
                 if (l.endswith(".a") or l.endswith(".so")) and not l.startswith("/"):
                     raw_depends.append(l)
-        buildDeps = []
+        buildDeps: List[BuildTarget] = []
         for d in raw_depends:
             regex = r".*/lib(grpc|protobuf)(\.|\+).*"
             if re.match(regex, d):
@@ -324,9 +325,11 @@ class NinjaParser:
                     raise
                 if d.startswith("/"):
                     imp = self.getCCImportForExternalDep(v)
-                    v.setOpaque(imp)
-                    quiet = imp is not None
-                    v.markAsExternal(quiet)
+                    if imp is None:
+                        logging.info(f"Missing {d} as an external dependency")
+                        v.markAsExternal()
+                    else:
+                        v = imp
                 elif v.name.endswith("CMakeLists.txt") or v.name.endswith(".cmake"):
                     quiet = True
                     v.markAsExternal(quiet)
@@ -360,7 +363,7 @@ class NinjaParser:
         if rule is None:
             logging.error(f"Coulnd't find a rule called {rulename}")
             return
-        build = Build(outputs, rule, inputs, buildDeps)
+        build = Build(outputs, rule, inputs, [d for d in buildDeps ])
         for k2, v2 in self.vars[self.currentContext].items():
             build.vars[k2] = v2
 
@@ -454,16 +457,17 @@ class NinjaParser:
         os.chdir(cwd)
         return tempDir
 
-    def getCCImportForExternalDep(self, target: BuildTarget) -> Optional[BazelCCImport]:
+    def getCCImportForExternalDep(self, target: BuildTarget) -> Optional[BuildTarget]:
         logging.debug(f"Checking {target.name} as part of CCimport")
         for imp in self.cc_imports:
+            assert isinstance(imp.opaque, BazelCCImport)
             # logging.info(f"Dealing with {imp} {imp.staticLibrary}")
-            if target.name.endswith(".a") and imp.staticLibrary is not None:
+            if target.name.endswith(".a") and imp.opaque.staticLibrary is not None:
                 # logging.info(f"Looking for {target.name} in {imp}")
-                if target.name in imp.staticLibrary:
+                if target.name in imp.opaque.staticLibrary:
                     return imp
-            if target.name.endswith(".so") and imp.sharedLibrary is not None:
-                if target.name in imp.sharedLibrary:
+            if target.name.endswith(".so") and imp.opaque.sharedLibrary is not None:
+                if target.name in imp.opaque.sharedLibrary:
                     # logging.info(f"Looking for {target.name} in {imp}")
                     return imp
         return None
@@ -829,7 +833,7 @@ class NinjaParser:
         self.directories.pop()
 
     def setCCImports(self, cc_imports: List[BazelCCImport]):
-        self.cc_imports = cc_imports
+        self.cc_imports = [self._getBuildTarget(imp.name, (imp.name, imp.location)).markAsExternal(True).setOpaque(imp) for imp in cc_imports]
 
     def setCompilerIncludes(self, compilerIncludes: List[str]):
         self.compilerIncludes = compilerIncludes

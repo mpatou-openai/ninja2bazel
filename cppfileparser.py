@@ -4,8 +4,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
-from bazel import BazelCCImport
 from helpers import resolvePath
+from build import BuildTarget
+from bazel import BazelCCImport
 
 
 def findAllHeaderFiles(current_dir: str) -> Generator[str, None, None]:
@@ -27,7 +28,7 @@ seen = set()
 class CPPIncludes:
     foundHeaders: Set[Tuple[str, Optional[str]]]
     notFoundHeaders: Set[str]
-    neededImports: Set[BazelCCImport]
+    neededImports: Set[BuildTarget]
     neededGeneratedFiles: Set[Tuple[str, Optional[str]]]
 
     def __add__(self, other: "CPPIncludes") -> "CPPIncludes":
@@ -47,7 +48,7 @@ def _findCPPIncludeForFile(
     includes_dirs: Set[str],
     current_dir: str,
     name: str,
-    cc_imports: List[BazelCCImport],
+    cc_imports: List[BuildTarget],
     compilerIncludes: List[str],
     generatedFiles: Dict[str, Any],
 ) -> Tuple[bool, CPPIncludes]:
@@ -93,7 +94,8 @@ def _findCPPIncludeForFile(
             # File might be in the standard include path of the compiler but still coming from
             # an external packate that we need to depends on
             for imp in cc_imports:
-                if full_file_name2 in imp.hdrs:
+                assert isinstance(imp.opaque, BazelCCImport)
+                if full_file_name2 in imp.opaque.hdrs:
                     logging.debug(f"Found {full_file_name} in {imp}")
                     ret.neededImports.add(imp)
                     break
@@ -111,7 +113,8 @@ def _findCPPIncludeForFile(
         logging.debug(f"Found {file} in the includes variable using {d}")
         # Check if the file is part of the cc_imports as we don't want to recurse for headers there
         for imp in cc_imports:
-            if full_file_name in imp.hdrs:
+            assert isinstance(imp.opaque, BazelCCImport)
+            if full_file_name in imp.opaque.hdrs:
                 logging.info(f"Found {full_file_name} in cc_import {imp}")
                 ret.neededImports.add(imp)
                 found = True
@@ -163,7 +166,7 @@ def findCPPIncludes(
     name: str,
     includes_dirs: Set[str],
     compilerIncludes: List[str],
-    cc_imports: List[BazelCCImport],
+    cc_imports: List[BuildTarget],
     generatedFiles: Dict[str, Any],
     parent: Optional[str] = None,
     generated: bool = False,

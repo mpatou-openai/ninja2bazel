@@ -151,7 +151,7 @@ class BuildTarget:
         self.is_a_file = False
         self.type = TargetType.other
         self.includes: Set[Tuple[str, Optional[str]]] = set()
-        self.depends: List[Union[BazelCCImport, "BuildTarget"]] = []
+        self.depends: List[Union["BuildTarget"]] = []
         self.aliases: List[str] = []
         # Is this target the first level (ie. one of the final output of the build) ?
         self.topLevel = False
@@ -179,10 +179,10 @@ class BuildTarget:
     def addIncludedFile(self, file: Tuple[str, Optional[str]]):
         self.includes.add(file)
 
-    def addDeps(self, dep: Union["BuildTarget", "BazelCCImport"]):
+    def addDeps(self, dep: Union["BuildTarget"]):
         self.depends.append(dep)
 
-    def setDeps(self, deps: List[Union["BuildTarget", "BazelCCImport"]]):
+    def setDeps(self, deps: List[Union["BuildTarget"]]):
         self.depends = deps
 
     def markAsManual(self):
@@ -203,8 +203,9 @@ class BuildTarget:
         self.type = TargetType.known
         return self
 
-    def setOpaque(self, o: object):
+    def setOpaque(self, o: object) -> "BuildTarget":
         self.opaque = o
+        return self
 
     def __repr__(self) -> str:
         return self.name
@@ -435,39 +436,58 @@ class Build:
                 f"Dealing with external dep {el.name} that doesn't have an opaque"
             )
             return
-        # VisitGraph won't visit deps for non produced targets ...
-        if len(el.depends) > 0:
-            logging.info(f"Visiting deps for {el.name}")
-            for dep in el.depends:
-                logging.debug(f"Visiting dep {dep}")
-                if ctx.current is not None:
-                    if isinstance(dep, BazelCCImport):
-                        if dep.name == "protobuf":
-                            # This means that we found that we depend on the protobuf library cc_import
-                            # but because bazel brings its own we don't need the cc_import one apart from any_pb
-                            # because it might be needed
-                            logging.info("Adding any_cc_proto")
-                            any_proto = getObject(
-                                BazelExternalDep, "any_proto", "@com_google_protobuf//"
-                            )
-                            any_cc_proto = getObject(
-                                BazelCCProtoLibrary,
-                                "any_cc_proto",
-                                ctx.current.location,
-                            )
-                            any_cc_proto.addDep(any_proto)
-                            ctx.current.addDep(any_cc_proto)
-                            ctx.bazelbuild.bazelTargets.add(any_cc_proto)
-                        else:
-                            ctx.current.addDep(dep)
-                            ctx.bazelbuild.bazelTargets.add(dep)
-                    elif isinstance(dep, Build):
-                        logging.info(f"Dep {dep} is a Build")
-                    else:
-                        if dep.name.startswith("@google/protobuf"):
-                            # Protobuf already handled
-                            continue
-                        logging.warn(f"Visiting {dep} but don't know what to do")
+        for dep in el.depends:
+            logging.debug(f"Visiting dep {dep}")
+            if ctx.current is None:
+                continue
+            if el.name.endswith(".proto"):
+                if not isinstance(ctx.current, BazelProtoLibrary):
+                    continue
+                # because of C++ libraries and binaries might depends directly on protobufs target output files (.h)
+                # we end up visiting protobuf files and ctx.current is pointing to the c++ library or binary
+                # we don't want to add it here
+
+                target = dep.name[1:].split("/")[-1].replace(".proto", "_proto")
+                logging.info(f"Adding dep {target} to {el.name}")
+                if dep.name.startswith("@google/protobuf"):
+                    ctx.current.addDep(
+                        BazelExternalDep(target, "@com_google_protobuf//")
+                    )
+                else:
+                    protoDep = getObject(
+                        BazelProtoLibrary, target, ctx.current.location
+                    )
+                    logging.info(
+                        f"Got protoDep {protoDep} and ctx.current {ctx.current}"
+                    )
+                    protoDep.addSrc(
+                        cls._genExportedFile(
+                            dep.name.replace(ctx.rootdir, ""), ctx.current.location
+                        )
+                    )
+                    ctx.bazelbuild.bazelTargets.add(protoDep)
+                    ctx.current.addDep(protoDep)
+            elif isinstance(dep.opaque, BazelCCImport):
+                imp = dep.opaque
+                if imp.name == "protobuf":
+                    # This means that we found that we depend on the protobuf library cc_import
+                    # but because bazel brings its own we don't need the cc_import one apart from any_pb
+                    # because it might be needed
+                    logging.info("Adding any_cc_proto")
+                    any_proto = getObject(
+                        BazelExternalDep, "any_proto", "@com_google_protobuf//"
+                    )
+                    any_cc_proto = getObject(
+                        BazelCCProtoLibrary, "any_cc_proto", ctx.current.location
+                    )
+                    any_cc_proto.addDep(any_proto)
+                    ctx.current.addDep(any_cc_proto)
+                    ctx.bazelbuild.bazelTargets.add(any_cc_proto)
+                else:
+                    ctx.current.addDep(imp)
+                    ctx.bazelbuild.bazelTargets.add(imp)
+            else:
+                logging.warn(f"Visiting {dep} but don't know what to do for {el}")
 
         if (
             el.type == TargetType.external
@@ -499,6 +519,9 @@ class Build:
                     ctx.current.addDep(maybe_cc_import)
                     ctx.bazelbuild.bazelTargets.add(maybe_cc_import)
                 return
+            else:
+                logging.error(f"External dep {el.name} has an unexpected opaque")
+                assert False
 
         if not ctx.current:
             # It can happen that .o are not connected to a real library or binary but just
@@ -508,12 +531,7 @@ class Build:
                 f"{el.name} is a file that is connected to a phony target {ctx.producer}, it should be filtered upstream, ignoring still"
             )
             return
-        if el.name.endswith(".h") or el.name.endswith(".hpp"):
-            # Seems not needed anymore this ?
-            assert False
-        elif el.name.endswith(".proto") and el.includes is None:
-            logging.warn(f"{el.name} is a protobuf and includes is none")
-        elif el.name.endswith(".proto") and el.includes is not None:
+        elif el.name.endswith(".proto"):
             if not isinstance(ctx.current, BazelProtoLibrary):
                 # because of C++ libraries and binaries might depends directly on protobufs target output files (.h)
                 # we end up visiting protobuf files and ctx.current is pointing to the c++ library or binary
@@ -702,23 +720,6 @@ class Build:
         self.setAssociatedBazelTarget(t)
 
         assert el.producedby is not None
-
-        for e in el.producedby.inputs:
-            continue
-            # might be not needed
-            if e.name.endswith(".proto"):
-                logging.info(
-                    f"Proto input for {ctx.rootdir} {el.name.replace(ctx.rootdir, '')}: {e.name.replace(ctx.rootdir, '')}"
-                )
-                path = e.name.replace(ctx.rootdir, "")
-                t.addSrc(self._genExportedFile(path, location))
-
-            for dep in e.depends:
-                # strip the @ marker
-                target = dep.name[1:].split("/")[-1].replace(".proto", "_proto")
-                logging.info(f"Adding dep {target} to {t.name}")
-                if dep.name.startswith("@google/protobuf"):
-                    t.addDep(BazelExternalDep(target, "@com_google_protobuf//"))
 
         tmp: BaseBazelTarget = t
 
@@ -1216,3 +1217,9 @@ class Build:
             return v
 
         return re.sub(regex, replacer, name)
+
+    def addDep(self, dep: "BuildTarget"):
+        self.depends.add(dep)
+
+    def addDeps(self, deps: List["BuildTarget"]):
+        self.depends.update(deps)
