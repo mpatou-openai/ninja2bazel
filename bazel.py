@@ -134,14 +134,14 @@ class BazelCCImport:
 
         # Overide the dirs if includes was specified on the cc_import
         if self.includes is not None:
-            dirs = set([f'"_{d[1:]}"' for d in sorted(self.includes)])
+            dirs = set([f'"_{d[1:]}"' for d in self.includes])
 
         ret = []
         if not self.skipWrapping:
             ret.append("cc_library(")
             ret.append(f'    name = "{self.name}",')
             ret.append(f'    deps = [":raw_{self.name}"],')
-            dirs_str = ",".join([f"{d}" for d in dirs])
+            dirs_str = ",".join(sorted([f"{d}" for d in dirs]))
             ret.append(f"    includes = [{dirs_str}],")
             ret.append('    visibility = ["//visibility:public"],')
             ret.append(")")
