@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from functools import total_ordering
-from typing import Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from bazel import (BaseBazelTarget, BazelBuild, BazelCCImport,
                    BazelCCProtoLibrary, BazelExternalDep, BazelGenRuleTarget,
@@ -156,6 +156,7 @@ class BuildTarget:
         # Is this target the first level (ie. one of the final output of the build) ?
         self.topLevel = False
         self.opaque: Optional[object] = None
+        self.bazelAdditionalParameters: Dict[str, Any] = {}
 
     def markTopLevel(self):
         self.topLevel = True
@@ -341,6 +342,9 @@ class BuildTarget:
         # call cleanup() to clean the context once a node has been visited
         ctx.cleanup()
 
+    def addTargetSpecificParameters(self, params: Dict[str, Any]):
+        self.bazelAdditionalParameters.update(params)
+
 
 class GeneratedBuildTarget(BuildTarget):
     pass
@@ -457,6 +461,11 @@ class Build:
                     protoDep = getObject(
                         BazelProtoLibrary, target, ctx.current.location
                     )
+                    for paramName, paramValue in dep.bazelAdditionalParameters.items():
+                        logging.info(
+                            f"Setting {paramName} to {paramValue} on {dep.name}"
+                        )
+                        protoDep.__setattr__(paramName, paramValue)
                     logging.info(
                         f"Got protoDep {protoDep} and ctx.current {ctx.current}"
                     )

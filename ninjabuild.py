@@ -711,10 +711,12 @@ class NinjaParser:
                                 # and d will be the delta with the work directory (ie. /opt/code/project/) so 
                                 # somthing like cpp/proto
                                 # it's important to know the delta because when calling protoc bazel won't let you provide
-                                # the values for -I and 
+                                # the values for -I and so if there is a delta and we don't strip it bazel won't be able to find the
+                                # included protobuf
                                 (d, _) = self.getShortName(p[1], workDir)
                                 logging.debug(f"Adding internal dependency {p[0]} to {f} ({tgt.name}) delta directory: {d}")
                                 dep = self._getBuildTarget(p[0])
+                                dep.addTargetSpecificParameters({"stripImportPrefix": f"/{d}"})
                                 tgt.addDeps(dep)
                                 #(f, _) = self.getShortName(p[0], workDir)
                                 #f = f.replace(d + os.path.sep, "")
