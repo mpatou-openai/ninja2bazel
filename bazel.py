@@ -345,6 +345,17 @@ class BazelTarget(BaseBazelTarget):
             name = self.name
         return name
 
+    def getAllDeps(self, deps_only=False):
+        if not deps_only:
+            for d in self.deps:
+                yield d
+        for d in self.deps:
+            try:
+                yield from d.getAllDeps()
+            except AttributeError:
+                logging.warn(f"Can't get deps for {d.name}")
+                raise
+
     def getAllHeaders(self, deps_only=False):
         if not deps_only:
             for h in self.hdrs:
@@ -395,8 +406,13 @@ class BazelTarget(BaseBazelTarget):
         name = self.targetName().replace(":", "")
         ret.append(f'    name = "{name}",')
         deps_headers = list(self.getAllHeaders(deps_only=True))
+        deps_deps = list(self.getAllDeps(deps_only=True))
+        deps :List[Union[BaseBazelTarget, BazelCCImport]]= []
         headers = []
         data: List[BaseBazelTarget] = []
+        for d in self.deps:
+            if d not in deps_deps:
+                deps.append(d)
         for h in self.hdrs:
             if h not in deps_headers:
                 if (
@@ -413,7 +429,7 @@ class BazelTarget(BaseBazelTarget):
                         data.append(h)
 
         sources = [f for f in self.srcs]
-        hm = {"srcs": sources, "hdrs": headers, "deps": self.deps, "data": data}
+        hm : Dict[str, List[Any]] = {"srcs": sources, "hdrs": headers, "deps": deps, "data": data}
         if self.type == "cc_binary":
             del hm["hdrs"]
             sources.extend(headers)
