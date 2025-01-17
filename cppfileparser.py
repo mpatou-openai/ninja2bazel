@@ -187,7 +187,7 @@ def findCPPIncludes(
         content = f.readlines()
     for line in content:
         found = False
-        match = re.match(r'#\s*include ((?:<|").*(?:>|"))', line)
+        match = re.match(r'\s*#\s*include ((?:<|").*(?:>|"))', line)
         if not match:
             continue
         current_include = match.group(1)
