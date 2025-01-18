@@ -441,7 +441,7 @@ class Build:
             )
             return
         for dep in el.depends:
-            logging.debug(f"Visiting dep {dep}")
+            # logging.debug(f"Visiting dep {dep}")
             if ctx.current is None:
                 continue
             if el.name.endswith(".proto"):
@@ -623,9 +623,7 @@ class Build:
                 includeDir = "This is wrong"
 
             if isinstance(ctx.current, BazelTarget):
-                logging.info(
-                    f"Adding header {i} using include {includeDir} from {el.name} {generated} to {ctx.current.name}"
-                )
+                # logging.info(f"Adding header {i} using include {includeDir} from {el.name} {generated} to {ctx.current.name}")
                 if includeDir is not None:
                     ctx.current.addHdr(
                         cls._genExportedFile(i, ctx.current.location),
@@ -1137,9 +1135,7 @@ class Build:
                 # Dear future reader, if you are here and you are wondering why it seems that we are processing multiple time
                 # the same library, fear not it might that this library has a more than one .o and so we will call this function for
                 # each .o
-                logging.debug(
-                    f"Adding flag {flag} to copt into {ctx.current.name} {el.name}"
-                )
+                # logging.debug(f"Adding flag {flag} to copt into {ctx.current.name} {el.name}")
                 ctx.current.addCopt(f'"{flag}"')
 
         for i in build.inputs:
