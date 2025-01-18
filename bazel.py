@@ -48,12 +48,31 @@ class BazelCCImport:
         self.name = name
         self.system_provided = 0
         self.hdrs: list[str] = []
-        self.deps: set[str] = set()
+        self._deps: set[Union["BazelCCImport", "BaseBazelTarget"]] = set()
         self.staticLibrary: Optional[str] = None
         self.sharedLibrary: Optional[str] = None
         self.location = ""
         self.skipWrapping = False
         self.includes: Optional[List[str]] = None
+
+    @property
+    def deps(self) -> set[Union["BazelCCImport", "BaseBazelTarget"]]:
+        return self._deps
+    
+    @deps.setter
+    def deps(self, deps: List[str]):
+        for d in deps:
+            logging.info(f"Adding dep {d}")
+            matches = re.match(r'(.*):(.+)', d)
+            if not matches:
+                raise AttributeError(f"Error parsing dep {d} as a bazel dependency")
+            location = matches.group(1)
+            name = matches.group(2)
+            (location, name) = d.split(":")
+            bazDep= getObject(BazelExternalDep, name, location)
+            self._deps.add(bazDep)
+        return self._deps
+    
 
     def setSkipWrapping(self, skipWrapping: bool):
         self.skipWrapping = skipWrapping
@@ -77,7 +96,7 @@ class BazelCCImport:
         self.physicalLocation = location
 
     def __eq__(self, other: object) -> bool:
-        assert isinstance(other, BazelCCImport)
+        assert isinstance(other, BazelCCImport) or isinstance(other, BaseBazelTarget)
         return self.name == other.name
 
     def __hash__(self) -> int:
@@ -88,9 +107,6 @@ class BazelCCImport:
 
     def __repr__(self) -> str:
         return f"cc_import {self.name}"
-
-    def targetName(self) -> str:
-        return f":{self.name}"
 
     def getGlobalImport(self) -> str:
         return ""
@@ -104,6 +120,10 @@ class BazelCCImport:
             return f"_{txt[1:]}"
         else:
             return txt
+
+    def getAllDeps(self, deps_only=False):
+        # Return an empty list, the deps of a cc_import are not propagated 
+        return []
 
     def asBazel(self) -> BazelTargetStrings:
         output = {}
@@ -176,16 +196,19 @@ class BazelCCImport:
         if len(self.deps) > 0:
             ret.append("    deps = [")
             for d in sorted(self.deps):
-                depPrefix=""
-                if not d.startswith("@"):
-                    depPrefix = ":"
-                ret.append(f'        "{depPrefix}{d.strip()}",')
+                ret.append(f'        "{d.location}{d.targetName()}",')
             ret.append("    ],")
         ret.append('    visibility = ["//visibility:public"],')
         ret.append(")")
 
         output[f"raw_{self.name}"] = ret
         return output
+
+    def targetName(self) -> str:
+        if self.name.startswith(":"):
+            return f"{self.name}"
+        else:
+            return f":{self.name}"
 
 
 PostProcess = Callable[[List[str]],List[str]]
@@ -262,6 +285,17 @@ class BaseBazelTarget(object):
         self.name = name
         self.location = location
         self.neededGeneratedFiles: set[str] = set()
+        self.hdrs: set["BaseBazelTarget"] = set()
+        self.deps: set[Union["BaseBazelTarget", BazelCCImport]] = set()
+
+    def depName(self):
+        return self.name
+
+    def targetName(self) -> str:
+        if self.name.startswith(":"):
+            return f"{self.name}"
+        else:
+            return f":{self.name}"
 
     def getGlobalImport(self) -> str:
         return ""
@@ -270,14 +304,11 @@ class BaseBazelTarget(object):
         return hash(self.type + self.name)
 
     def __eq__(self, other: object) -> bool:
-        assert isinstance(other, BaseBazelTarget)
+        assert isinstance(other, BazelCCImport) or isinstance(other, BaseBazelTarget)
         return self.name == other.name
 
     def __lt__(self, other: "BaseBazelTarget") -> bool:
         return self.name < other.name
-
-    def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
-        raise NotImplementedError(f"Class {self.__class__} doesn't implement addDep")
 
     def addSrc(self, target: "BaseBazelTarget"):
         raise NotImplementedError(f"addSrc not implemented for {self.__class__}")
@@ -285,8 +316,30 @@ class BaseBazelTarget(object):
     def asBazel(self) -> BazelTargetStrings:
         raise NotImplementedError
 
-    def targetName(self) -> str:
-        return self.name
+    def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
+        raise NotImplementedError
+
+    def getAllHeaders(self, deps_only=False):
+        if not deps_only:
+            for h in self.hdrs:
+                yield h
+        for d in self.deps:
+            try:
+                yield from d.getAllHeaders()
+            except AttributeError:
+                logging.warn(f"Can't get headers for {d.name}")
+                raise
+
+    def getAllDeps(self, deps_only=False):
+        if not deps_only:
+            for d in self.deps:
+                yield d
+        for d in self.deps:
+            try:
+                yield from d.getAllDeps()
+            except AttributeError:
+                logging.warn(f"Can't get deps for {d.name}")
+                raise
 
 
 @total_ordering
@@ -317,15 +370,10 @@ class BazelTarget(BaseBazelTarget):
     def __init__(self, type: str, name: str, location: str):
         super().__init__(type, name, location)
         self.srcs: set[BaseBazelTarget] = set()
-        self.hdrs: set[BaseBazelTarget] = set()
         self.includeDirs: set[IncludeDir] = set()
-        self.deps: set[Union[BaseBazelTarget, BazelCCImport]] = set()
         self.addPrefixIfRequired: bool = True
         self.copts: set[str] = set()
         self.defines: set[str] = set()
-
-    def targetName(self) -> str:
-        return f":{self.depName()}"
 
     def addCopt(self, opt: str):
         self.copts.add(opt)
@@ -344,29 +392,10 @@ class BazelTarget(BaseBazelTarget):
         else:
             name = self.name
         return name
-
-    def getAllDeps(self, deps_only=False):
-        if not deps_only:
-            for d in self.deps:
-                yield d
-        for d in self.deps:
-            try:
-                yield from d.getAllDeps()
-            except AttributeError:
-                logging.warn(f"Can't get deps for {d.name}")
-                raise
-
-    def getAllHeaders(self, deps_only=False):
-        if not deps_only:
-            for h in self.hdrs:
-                yield h
-        for d in self.deps:
-            try:
-                yield from d.getAllHeaders()
-            except AttributeError:
-                logging.warn(f"Can't get headers for {d.name}")
-                raise
-
+    
+    def targetName(self):
+        return f":{self.depName()}"
+    
     def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
         self.deps.add(target)
 
@@ -403,16 +432,16 @@ class BazelTarget(BaseBazelTarget):
     def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
-        name = self.targetName().replace(":", "")
+        name = self.depName().replace(":", "")
         ret.append(f'    name = "{name}",')
-        deps_headers = list(self.getAllHeaders(deps_only=True))
-        deps_deps = list(self.getAllDeps(deps_only=True))
-        deps :List[Union[BaseBazelTarget, BazelCCImport]]= []
+        deps_headers = set(self.getAllHeaders(deps_only=True))
+        deps_deps = set(self.getAllDeps(deps_only=True))
+        deps :Set[Union[BaseBazelTarget, BazelCCImport]]= set()
         headers = []
         data: List[BaseBazelTarget] = []
         for d in self.deps:
             if d not in deps_deps:
-                deps.append(d)
+                deps.add(d)
         for h in self.hdrs:
             if h not in deps_headers:
                 if (
@@ -429,7 +458,7 @@ class BazelTarget(BaseBazelTarget):
                         data.append(h)
 
         sources = [f for f in self.srcs]
-        hm : Dict[str, List[Any]] = {"srcs": sources, "hdrs": headers, "deps": deps, "data": data}
+        hm : Dict[str, List[Any]] = {"srcs": sources, "hdrs": headers, "deps": list(deps), "data": data}
         if self.type == "cc_binary":
             del hm["hdrs"]
             sources.extend(headers)
@@ -587,18 +616,10 @@ class BazelGenRuleTarget(BaseBazelTarget):
 class BazelCCProtoLibrary(BaseBazelTarget):
     def __init__(self, name: str, location: str):
         super().__init__("cc_proto_library", name, location)
-        self.deps: Set[BaseBazelTarget] = set()
 
     def addDep(self, dep: Union[BaseBazelTarget, BazelCCImport]):
         assert isinstance(dep, BazelProtoLibrary) or isinstance(dep, BazelExternalDep)
         self.deps.add(dep)
-
-    def targetName(self) -> str:
-        return f":{self.name}"
-
-    def getAllHeaders(self, deps_only=False):
-        # FIXME
-        return []
 
     def asBazel(self) -> BazelTargetStrings:
         ret = []
@@ -624,7 +645,6 @@ class BazelCCProtoLibrary(BaseBazelTarget):
 class BazelGRPCCCProtoLibrary(BaseBazelTarget):
     def __init__(self, name: str, location: str):
         super().__init__("cc_grpc_library", name, location)
-        self.deps: Set[BaseBazelTarget] = set()
         self.srcs: Set[BaseBazelTarget] = set()
         self.deps.add(BazelExternalDep("grpc++", "@com_github_grpc_grpc//"))
 
@@ -636,22 +656,15 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
         assert isinstance(dep, BazelProtoLibrary)
         self.srcs.add(dep)
 
-    def getAllHeaders(self, deps_only=False):
-        # FIXME
-        return []
-
     def getGlobalImport(self):
         return 'load("@com_github_grpc_grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")'
-
-    def targetName(self) -> str:
-        return f":{self.name}"
 
     def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
         assert len(self.deps) > 0
-        hm = {"srcs": self.srcs, "deps": self.deps}
+        hm: Dict[str, Set[Any]] = {"srcs": self.srcs, "deps": self.deps}
         ret.append("    grpc_only = True,")
         for k, v in hm.items():
             if len(v) > 0:
@@ -681,7 +694,6 @@ class BazelProtoLibrary(BaseBazelTarget):
         )
         self.stripImportPrefix = stripImportPrefix
         self.srcs: Set[BaseBazelTarget] = set()
-        self.deps: Set[BaseBazelTarget] = set()
 
     def getGlobalImport(self):
         return 'load("@rules_proto//proto:defs.bzl", "proto_library")'
@@ -693,13 +705,6 @@ class BazelProtoLibrary(BaseBazelTarget):
         assert isinstance(target, BaseBazelTarget)
         self.deps.add(target)
 
-    def getAllHeaders(self, deps_only=False):
-        # FIXME
-        return []
-
-    def targetName(self):
-        return f":{super().targetName()}"
-
     def asBazel(self) -> BazelTargetStrings:
         ret = []
         ret.append(f"{self.type}(")
@@ -707,7 +712,7 @@ class BazelProtoLibrary(BaseBazelTarget):
         if self.stripImportPrefix is not None:
             ret.append(f'    strip_import_prefix = "{self.stripImportPrefix}",')
 
-        hm = {"srcs": self.srcs, "deps": self.deps}
+        hm: Dict[str, Set[Any]] = {"srcs": self.srcs, "deps": self.deps}
         for k, v in hm.items():
             if len(v) > 0:
                 ret.append(f"    {k} = [")
@@ -729,13 +734,9 @@ class BazelProtoLibrary(BaseBazelTarget):
 class BazelExternalDep(BaseBazelTarget):
     def __init__(self, name: str, location: str):
         super().__init__("external", name, location)
-        self.deps: Set[BaseBazelTarget] = set()
 
     def asBazel(self) -> BazelTargetStrings:
         return {}
-
-    def targetName(self):
-        return f":{self.name}"
 
 
 @total_ordering
@@ -767,9 +768,6 @@ class BazelGenRuleTargetOutput(BaseBazelTarget):
 
     def asBazel(self) -> BazelTargetStrings:
         return self.rule.asBazel()
-
-    def targetName(self) -> str:
-        return f":{self.name}"
 
     def getAllHeaders(self, deps_only=False):
         if self.name.endswith(".h"):
