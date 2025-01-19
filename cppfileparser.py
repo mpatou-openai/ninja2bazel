@@ -86,16 +86,17 @@ def _findCPPIncludeForFile(
 
         # Search in the compiler include, depending on how things were done in the Ninja file
         # the include path might have it or not ...
+        foundCCImport = False
         for cdir in compilerIncludes:
             full_file_name2 = f"{cdir}/{file}"
             if not os.path.exists(full_file_name2) or os.path.isdir(full_file_name2):
                 continue
-            logging.debug(f"Found {file} in the compiler include path: {cdir}")
             # File might be in the standard include path of the compiler but still coming from
             # an external packate that we need to depends on
             for imp in cc_imports:
                 assert isinstance(imp.opaque, BazelCCImport)
                 if full_file_name2 in imp.opaque.hdrs:
+                    foundCCImport = True
                     logging.debug(f"Found {full_file_name} in {imp}")
                     ret.neededImports.add(imp)
                     break
@@ -103,7 +104,8 @@ def _findCPPIncludeForFile(
             break
 
         if found and os.path.exists(full_file_name2):
-            logging.debug(f"Found {file} in the compiler include path: {cdir} skipping")
+            if not foundCCImport:
+                logging.debug(f"Found {file} in the compiler include path: {cdir} skipping")
             break
 
 
