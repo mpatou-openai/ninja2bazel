@@ -2,10 +2,11 @@
 
 # Mostly for system libraries (ie. the one that you get from a package manager)
 import os
+import re
 import subprocess
 
 
-def getStanza(shared_lib: str, header: list[str], shared_libs: list[str]) -> str:
+def getStanza(shared_lib: str, headers: list[str], shared_libs: list[str]) -> str:
     name = shared_lib.split("/")[-1]
     name = name.replace(".so", "")
     static_lib = None
@@ -17,19 +18,42 @@ def getStanza(shared_lib: str, header: list[str], shared_libs: list[str]) -> str
     txt = ""
     if static_lib is not None:
         txt = f'    static_library = "{static_lib}",\n'
+    if len(headers) == 1 and headers[0].startswith("glob"):
+        headers = headers[0]  # type: ignore
     stanza = f"""
 cc_import(
     name = "{name}",
     interface_library = "{shared_lib}",
-    hdrs = {list(headers)},
+    hdrs = {headers},
     system_provided = 1,
 {txt})"""
     return stanza
 
 
 seen = set()
+boost: dict[str, str] = {
+    "libboost-filesystem": 'glob(["/usr/include/boost/filesystem.hpp", "/usr/include/boost/filesystem/**/*.hpp"])',
+    "libboost-program_options": 'glob(["/usr/include/boost/program_options.hpp", "/usr/include/boost/program_options/**/*.hpp"])',
+    "libboost-system": 'glob(["/usr/include/boost/system.hpp", "/usr/include/boost/system/**/*.hpp"])',
+    "libboost-thread": 'glob(["/usr/include/boost/thread.hpp", "/usr/include/boost/thread/**/*.hpp"])',
+    "libboost-atomic": 'glob(["/usr/include/boost/atomic.hpp", "/usr/include/boost/atomic/**/*.hpp"])',
+    "libboost-context": 'glob(["/usr/include/boost/context.hpp", "/usr/include/boost/context/**/*.hpp"])',
+    "libboost-regex": 'glob(["/usr/include/boost/regex.hpp", "/usr/include/boost/regex/**/*.hpp"])',
+}
+
+
+def getAllPackages():
+    args = ["apt", "list", "--installed"]
+    process = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    for pkg_line in process.stdout.split():
+        if b"/" in pkg_line:
+            rawpkg = pkg_line.decode("utf-8").split("/")
+            pkg = rawpkg[0]
+            yield pkg
+
 
 with open("/dev/stdin") as input:
+    allPkgs = list(getAllPackages())
     line = input.readline()
     while line:
         line = line.rstrip()
@@ -40,38 +64,65 @@ with open("/dev/stdin") as input:
             line = input.readline()
             continue
         process = subprocess.run(args, stdout=subprocess.PIPE)
-        pkg = None
+        rawpkg = None
         for pkg_line in process.stdout.split():
             if b":" in pkg_line:
-                pkg = pkg_line.decode("utf-8").split(":")
+                rawpkg = pkg_line.decode("utf-8").split(":")
         shared_libs: set[str] = set()
         static_libs: set[str] = set()
         headers: set[str] = set()
         unknowns: set[str] = set()
-        if pkg is not None:
+        if rawpkg is not None:
+            pkg = rawpkg[0]
+            regex = r"(.*)\d+\.\d+\.\d+$"
+            matches = re.match(regex, pkg)
 
-            args = ["dpkg", "-L", pkg[0]]
-            process = subprocess.run(args, stdout=subprocess.PIPE)
-            for pkg_line in process.stdout.split():
-                entry = pkg_line.decode("utf-8")
-                if (
-                    "share/man/" in entry
-                    or "share/doc/" in entry
-                    or os.path.isdir(entry)
-                    or entry.endswith(".pc")
-                    or entry.endswith(".cmake")
-                ):
-                    continue
-                if entry.endswith(".so"):
-                    shared_libs.add(entry)
-                    seen.add(entry)
-                elif entry.endswith(".a"):
-                    static_libs.add(entry)
-                    seen.add(entry)
-                elif entry.endswith(".h"):
-                    headers.add(entry)
+            pkgs = {rawpkg[0]}
+            base = None
+            if matches is not None:
+                base = matches.group(1)
+                for p in allPkgs:
+                    if p.startswith(base):
+                        pkgs.add(p)
+            else:
+                matches = re.match(r"(.*)-dev", rawpkg[0])
+                if matches is not None:
+                    pkgs.add(matches.group(1))
                 else:
-                    unknowns.add(entry)
+                    pkgs.add(f"{rawpkg[0]}-dev")
+
+            for pkg in pkgs:
+                # print(f"Doing {pkg}")
+                args = ["dpkg", "-L", pkg]
+                try:
+                    process = subprocess.run(
+                        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                    )
+                except subprocess.CalledProcessError as _e:
+                    continue
+                for pkg_line in process.stdout.split():
+                    entry = pkg_line.decode("utf-8")
+                    if (
+                        "share/man/" in entry
+                        or "share/doc/" in entry
+                        or os.path.isdir(entry)
+                        or entry.endswith(".pc")
+                        or entry.endswith(".cmake")
+                    ):
+                        continue
+                    if entry.endswith(".so"):
+                        shared_libs.add(entry)
+                        seen.add(entry)
+                    elif entry.endswith(".a"):
+                        static_libs.add(entry)
+                        seen.add(entry)
+                    elif entry.endswith(".h") or entry.endswith(".hpp"):
+                        headers.add(entry)
+                    else:
+                        unknowns.add(entry)
+
+        if base is not None and base.startswith("libboost"):
+            headers.add(boost.get(base, ""))
 
         name = line.split("/")[-1]
         name = name.replace(".so", "")
