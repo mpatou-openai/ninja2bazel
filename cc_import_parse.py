@@ -1,9 +1,9 @@
 import glob
 import logging
 import re
-from typing import Optional
+from typing import Optional, Set, Union
 
-from bazel import BazelCCImport
+from bazel import BazelCCImport, BaseBazelTarget
 
 def _processValue(inflightVals: str, inflightAttr: str, current: BazelCCImport):
     inGlob = False
@@ -44,14 +44,13 @@ def _processValue(inflightVals: str, inflightAttr: str, current: BazelCCImport):
     setattr(current, inflightAttr, vals)
 
 def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]:
-    imports = []
+    imports = {}
     newObj = False
     current: Optional[BazelCCImport] = None
     name = ""
     inflightAttr = None
     inflightVals = None
     for line in raw_imports:
-
         line = line.strip()
         if line.startswith("#") or not line:
             continue
@@ -72,10 +71,9 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
             if inflightVals is not None:
                 _processValue(inflightVals, inflightAttr, current)
                 inflightVals = None
-            imports.append(current)
+            imports[current.name] = current
             current = None
             continue
-                
 
         regexAttribute = r"(.*)\s*=\s*(.*)"
         r = re.match(regexAttribute, line)
@@ -112,8 +110,20 @@ def parseCCImports(raw_imports: list[str], location: str) -> list[BazelCCImport]
             if inflightVals is not None:
                 inflightVals += f"\n{line}"
 
+    for imp in imports.values():
+        newDeps: Set[Union[BazelCCImport, BaseBazelTarget]] = set()
+        for d in imp.deps:
+            if d.location == "":
+                if d.name not in imports:
+                    raise ValueError(f"Dependency {d} not found")
+                logging.debug(f"Adding dependency {d.name} location {imports[d.name].location}")    
+                newDeps.add(imports[d.name])
+            else:
+                logging.debug(f"Adding dependency {d.name} location {d.location}")
+                newDeps.add(d)
+        imp.deps = newDeps
 
-    return imports
+    return list(imports.values())
 
 
 def cleanupVar(var: str) -> str:

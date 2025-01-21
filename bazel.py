@@ -60,17 +60,23 @@ class BazelCCImport:
         return self._deps
     
     @deps.setter
-    def deps(self, deps: List[str]):
+    def deps(self, deps: Union[List[Union["BaseBazelTarget", "BazelCCImport"]], List[str]]):
+        self._deps = set()
         for d in deps:
-            logging.info(f"Adding dep {d}")
-            matches = re.match(r'(.*):(.+)', d)
-            if not matches:
-                raise AttributeError(f"Error parsing dep {d} as a bazel dependency")
-            location = matches.group(1)
-            name = matches.group(2)
-            (location, name) = d.split(":")
-            bazDep= getObject(BazelExternalDep, name, location)
-            self._deps.add(bazDep)
+            if type(d) is str:
+
+                logging.info(f"Adding dep {d}")
+                matches = re.match(r'(.*):(.+)', d)
+                if not matches:
+                    raise AttributeError(f"Error parsing dep {d} as a bazel dependency")
+                location = matches.group(1)
+                name = matches.group(2)
+                (location, name) = d.split(":")
+                bazDep= getObject(BazelExternalDep, name, location)
+                self._deps.add(bazDep)
+            else:
+                assert not isinstance(d, str)
+                self._deps.add(d)
         return self._deps
     
 
@@ -196,7 +202,10 @@ class BazelCCImport:
         if len(self.deps) > 0:
             ret.append("    deps = [")
             for d in sorted(self.deps):
-                ret.append(f'        "{d.location}{d.targetName()}",')
+                if d.location == self.location:
+                    ret.append(f'        "{d.targetName()}",')
+                else:
+                    ret.append(f'        "{d.location}{d.targetName()}",')
             ret.append("    ],")
         ret.append('    visibility = ["//visibility:public"],')
         ret.append(")")

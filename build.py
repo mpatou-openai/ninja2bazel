@@ -495,6 +495,9 @@ class Build:
                 else:
                     ctx.current.addDep(imp)
                     ctx.bazelbuild.bazelTargets.add(imp)
+                    for d in imp.deps:
+                        if isinstance(d, BazelCCImport):
+                            ctx.bazelbuild.bazelTargets.add(d)
             else:
                 logging.warn(f"Visiting {dep} but don't know what to do for {el}")
 
