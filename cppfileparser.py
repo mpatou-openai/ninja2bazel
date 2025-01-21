@@ -215,7 +215,7 @@ def findCPPIncludes(
                     # So we will need to iterate on the dict look for the values
                     foundGenerated = False
                     for k, v in generatedFiles.items():
-                        logging.info(f"Checking {k} against {name}")
+                        #logging.info(f"Checking {k} against {name}")
                         if name.endswith(k):
                             foundGenerated = True
                             genericGeneratedHeader = f"{name.replace(v[1]+'/','').replace(os.path.basename(k), file)}"
