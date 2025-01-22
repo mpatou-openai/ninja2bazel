@@ -144,6 +144,7 @@ class BuildTarget:
         implicit: bool = False,
     ):
         self.name = name
+        self.alias: Optional["BuildTarget"] = None
         (self.shortName, self.location) = shortName
         self.implicit = implicit
         self.producedby: Optional["Build"] = None
@@ -157,6 +158,9 @@ class BuildTarget:
         self.topLevel = False
         self.opaque: Optional[object] = None
         self.bazelAdditionalParameters: Dict[str, Any] = {}
+
+    def setAlias(self, alias: "BuildTarget"):
+        self.alias = alias
 
     def markTopLevel(self):
         self.topLevel = True
@@ -373,7 +377,7 @@ class Build:
         self.outputs: List[BuildTarget] = outputs
         self.rulename: Rule = rulename
         self.includes: Set[Tuple[str, str]] = set()
-        self.inputs: List[BuildTarget] = inputs
+        self.inputs: Set[BuildTarget] = set(inputs)
         self.depends: Set[BuildTarget] = set(depends)
         self.associatedBazelTarget: Optional[BaseBazelTarget] = None
 
