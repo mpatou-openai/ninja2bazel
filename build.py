@@ -380,6 +380,7 @@ class Build:
         self.inputs: Set[BuildTarget] = set(inputs)
         self.depends: Set[BuildTarget] = set(depends)
         self.associatedBazelTarget: Optional[BaseBazelTarget] = None
+        self.pruned = False
 
         for o in self.outputs:
             o.producedby = self
@@ -391,6 +392,9 @@ class Build:
             d.usedby(self)
 
         self.vars: Dict[str, str] = {}
+
+    def needPruning(self, status: bool = True):
+        self.pruned = status
 
     def setAssociatedBazelTarget(self, t: BaseBazelTarget):
         self.associatedBazelTarget = t

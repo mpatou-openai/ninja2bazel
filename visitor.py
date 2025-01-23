@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Set
 
 
 @dataclass
@@ -15,3 +16,10 @@ class VisitorContext:
 
     def cleanup(self) -> None:
         pass
+
+
+
+@dataclass
+class PrunedVisitorContext:
+    visited:Set[object] =  field(default_factory=set, hash=False)
+

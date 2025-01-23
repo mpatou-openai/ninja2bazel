@@ -17,7 +17,7 @@ from build_visitor import (BazelBuildVisitorContext, BuildVisitor,
 from cppfileparser import CPPIncludes, findCPPIncludes, parseIncludes
 from helpers import resolvePath
 from protoparser import findProtoIncludes
-from visitor import VisitorContext
+from visitor import VisitorContext, PrunedVisitorContext
 
 IGNORED_STANZA = [
     "ninja_required_version",
@@ -857,6 +857,41 @@ class NinjaParser:
     def setCompilerIncludes(self, compilerIncludes: List[str]):
         self.compilerIncludes = compilerIncludes
 
+    def pruneTransitivePhonyTargets(self):
+        startingBuild = self.all_outputs["all"].producedby
+
+        ctx = PrunedVisitorContext()
+        self._visitGraph(startingBuild, ctx) 
+
+
+    def _visitGraph(self, build: Build, ctx: PrunedVisitorContext, parentBuild: Optional[Build] = None, attribute: Optional[str] = None, index: Optional[int] = None):
+        if build in ctx.visited:
+            return
+        else:
+            ctx.visited.add(build)
+        for attr in ["inputs", "depends"]:
+            elements = list(getattr(build, attr))
+            for i in range(len(elements)):
+                childBuild = elements[i].producedby
+                if childBuild is not None:
+                    if childBuild.rulename.name == "phony":
+                        pass
+                    self._visitGraph(childBuild, ctx, build, attr, i)
+        # We want to do that after we have visited all the inputs / depends
+        if canBePruned(build) and attribute is not None:
+            logging.info(f"Pruning {build}")
+            # Take the inputs of the build and in the parent build replace the input/dependency on this build's output by the inputs
+            assert len(build.depends) == 0
+            assert parentBuild is not None
+            assert index is not None
+            build.needPruning()
+            newElements = list(getattr(parentBuild, attribute))
+            newElements[index] = None
+            for input in build.inputs:
+                newElements.append(input)
+            setattr(parentBuild, attribute, set(filter(lambda x: x is not None, newElements)))
+
+
     def resolveAliases(self):
         for b in self.buildEdges:
             for attr in ["inputs", "depends"]:
@@ -870,6 +905,17 @@ class NinjaParser:
                 if changed:
                     setattr(b, attr, set(elem))
 
+def canBePruned(b: Build) -> bool:
+    if b.rulename.name != "phony":
+        return False
+    if len(b.inputs) == 0:
+        return True
+    for i in b.inputs:
+        if i.producedby is None:
+            return False
+        if i.producedby.rulename.name != "phony":
+            return False
+    return True
 
 def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
     b = parser.all_outputs["all"].producedby
@@ -920,6 +966,7 @@ def getBuildTargets(
     logging.info("Parsing done")
     parser.endContext(ninjaFileName)
     parser.resolveAliases()
+    parser.pruneTransitivePhonyTargets()
 
     if len(parser.missing) != 0:
         logging.error(
