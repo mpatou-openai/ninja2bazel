@@ -64,12 +64,12 @@ class BuildVisitor:
             if parentBuild is not None and parentBuild.rulename.name == "phony":
                 pass
             if (
-                parentBuild is not None
-                and ctx.parentIsPhony
-                and not parentBuild.canGenerateFinal()
+                parentBuild is not None and
+                ctx.parentIsPhony and
+                ctx.current is None
             ):
                 logging.info(
-                    f"Skipping {el.name} used by {parentBuild.rulename.name} because it's a chain of empty targets"
+                    f"Skipping {el.name} {showParentBuildDetail(parentBuild)} because it's a chain of empty targets"
                 )
                 return False
             if el.producedby is not None:
@@ -83,3 +83,15 @@ class BuildVisitor:
                 return True
 
         return visitor
+
+def showParentBuildDetail(build: Build) -> str:
+    output = build.outputs[0]
+    parentBuild = output.usedbybuilds[0]
+    if parentBuild is None:
+        parentBuildRuleName = "NONE"
+        parentBuildOutput = "NONE"
+    else:
+        parentBuildOutput = parentBuild.outputs[0]
+        parentBuildRuleName = parentBuild.rulename.name
+
+    return f"-> {build.rulename.name} -> {output} -> {parentBuildRuleName} -> {parentBuildOutput}"
