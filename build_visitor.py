@@ -50,7 +50,7 @@ class BuildVisitor:
             return build.handlePhonyForBazelGen(ctx, el, build)
         else:
             assert False
-            return False
+
 
     @classmethod
     def getVisitor(cls) -> VisitorType:

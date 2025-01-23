@@ -748,18 +748,6 @@ class Build:
         ctx.current = tmp
         return True
 
-    def canGenerateFinal(self) -> bool:
-        ret = self.getCoreCommand()
-        if ret is None:
-            return False
-        cmd, _ = ret
-        if self.isCPPCommand(cmd) and self.vars.get("LINK_FLAGS") is not None:
-            return True
-        if self.isCPPCommand(cmd) and "-c" not in cmd:
-            return True
-
-        return False
-
     def _handleCustomCommandForBazelGen(
         self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
     ) -> bool:
