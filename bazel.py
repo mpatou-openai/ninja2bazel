@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from functools import cmp_to_key, total_ordering
+from functools import cmp_to_key, total_ordering, cache
 from typing import (Any, Callable, Dict, List, Optional, Set, Type, TypeVar,
                     Union)
 
@@ -119,7 +119,7 @@ class BazelCCImport:
 
     def getAllHeaders(self, deps_only=False):
         # cc_import have headers but we don't include them in the upper target
-        return []
+        return set()
 
     def replaceFirst(self, txt: str) -> str:
         if len(txt) > 0:
@@ -328,27 +328,34 @@ class BaseBazelTarget(object):
     def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
         raise NotImplementedError
 
-    def getAllHeaders(self, deps_only=False):
+
+    @cache
+    def getAllHeaders(self, deps_only=False) -> Set["BaseBazelTarget"]:
+        ret = set()
         if not deps_only:
-            for h in self.hdrs:
-                yield h
+            ret.update(self.hdrs)
         for d in self.deps:
             try:
-                yield from d.getAllHeaders()
+                ret.update(d.getAllHeaders())
             except AttributeError:
                 logging.warn(f"Can't get headers for {d.name}")
                 raise
+        logging.info(f"Returning for {self.name} {len(ret)} headers")
+        return ret
 
-    def getAllDeps(self, deps_only=False):
+    @cache
+    def getAllDeps(self, deps_only=False) -> Set[Union["BaseBazelTarget", BazelCCImport]]:
+        ret = set()
         if not deps_only:
-            for d in self.deps:
-                yield d
+            ret.update(self.deps)
         for d in self.deps:
             try:
-                yield from d.getAllDeps()
+                ret.update(d.getAllDeps())
             except AttributeError:
                 logging.warn(f"Can't get deps for {d.name}")
                 raise
+        logging.info(f"Returning for {self.name} {len(ret)} deps")
+        return ret
 
 
 @total_ordering
@@ -780,8 +787,8 @@ class BazelGenRuleTargetOutput(BaseBazelTarget):
 
     def getAllHeaders(self, deps_only=False):
         if self.name.endswith(".h"):
-            return [self.name]
-        return []
+            return set(self.name)
+        return set()
 
 
 class PyBinaryBazelTarget(BaseBazelTarget):
