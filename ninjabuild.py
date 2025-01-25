@@ -511,6 +511,7 @@ class NinjaParser:
                 logging.debug(f"Processing {f}")
 
             includes_dirs: Set[str] = set()
+            includes = None
             for b in target.usedbybuilds:
                 includes = b.vars.get("INCLUDES", "")
                 if includes != "":
