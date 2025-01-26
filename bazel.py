@@ -1,13 +1,74 @@
 import logging
 import os
 import re
-from functools import cmp_to_key, total_ordering, cache
+from functools import cache, cmp_to_key, total_ordering
 from typing import (Any, Callable, Dict, List, Optional, Set, Type, TypeVar,
                     Union)
 
 BazelTargetStrings = Dict[str, List[str]]
 # Define a type variable that can be any type
 T = TypeVar("T")
+
+
+def _getPrefix(d: Union["BaseBazelTarget", "BazelCCImport"], location: str) -> str:
+    if d.location.startswith("@"):
+        return d.location
+    elif d.location.startswith("//"):
+        return d.location
+    return f"//{d.location}" if d.location != location else ""
+
+
+def compare_deps(
+    obja: Union["BazelCCImport", "BaseBazelTarget"],
+    objb: Union["BazelCCImport", "BaseBazelTarget"],
+    _getPrefix=Callable[[Union["BazelCCImport", "BaseBazelTarget"]], str],
+) -> int:
+    a = f"{_getPrefix(obja)}{obja.targetName()}"
+    b = f"{_getPrefix(objb)}{objb.targetName()}"
+    ret = 0
+    if a[0] == b[0]:
+        if a == b:
+            ret = 0
+        elif a > b:
+            ret = 1
+        else:
+            ret = -1
+    elif a[0] == ":":
+        ret = -1
+    elif b[0] == ":":
+        # a > b
+        ret = 1
+    elif b[0] == "@":
+        # a > b
+        ret = 1
+    elif a[0] == "@":
+        ret = -1
+    return ret
+
+
+def compare_imports(a, b):
+    # get rid of load("
+    a = a[6:]
+    b = b[6:]
+    ret = 0
+    if a[0] == b[0]:
+        if a == b:
+            ret = 0
+        elif a > b:
+            ret = 1
+        else:
+            ret = -1
+    elif b[0] == "@":
+        # a > b
+        ret = 1
+    elif a[0] == "@":
+        # a < b
+        ret = -1
+    else:
+        assert False
+        ret = 1
+    return ret
+
 
 IncludeDir = tuple[str, bool]
 
@@ -58,27 +119,28 @@ class BazelCCImport:
     @property
     def deps(self) -> set[Union["BazelCCImport", "BaseBazelTarget"]]:
         return self._deps
-    
+
     @deps.setter
-    def deps(self, deps: Union[List[Union["BaseBazelTarget", "BazelCCImport"]], List[str]]):
+    def deps(
+        self, deps: Union[List[Union["BaseBazelTarget", "BazelCCImport"]], List[str]]
+    ):
         self._deps = set()
         for d in deps:
             if type(d) is str:
 
                 logging.info(f"Adding dep {d}")
-                matches = re.match(r'(.*):(.+)', d)
+                matches = re.match(r"(.*):(.+)", d)
                 if not matches:
                     raise AttributeError(f"Error parsing dep {d} as a bazel dependency")
                 location = matches.group(1)
                 name = matches.group(2)
                 (location, name) = d.split(":")
-                bazDep= getObject(BazelExternalDep, name, location)
+                bazDep = getObject(BazelExternalDep, name, location)
                 self._deps.add(bazDep)
             else:
                 assert not isinstance(d, str)
                 self._deps.add(d)
         return self._deps
-    
 
     def setSkipWrapping(self, skipWrapping: bool):
         self.skipWrapping = skipWrapping
@@ -128,7 +190,7 @@ class BazelCCImport:
             return txt
 
     def getAllDeps(self, deps_only=False):
-        # Return an empty list, the deps of a cc_import are not propagated 
+        # Return an empty list, the deps of a cc_import are not propagated
         return []
 
     def asBazel(self) -> BazelTargetStrings:
@@ -137,7 +199,7 @@ class BazelCCImport:
         val = "[]"
         if len(self.hdrs) > 1:
             # let's iterate on self.hdrs and put the files with the same suffix in the same array
-            byExt : Dict[str, List[str]] = {}
+            byExt: Dict[str, List[str]] = {}
             globs = []
             for h in self.hdrs:
                 ext = h.split(".")[-1]
@@ -150,7 +212,11 @@ class BazelCCImport:
                 globs.extend([f'"_{globifyPath(c, k)[1:]}"' for c in common])
                 for c in common:
                     dirs.add(f'"_{c[1:]}"')
-            val = f' glob([{",".join(globs)}])'
+            if len(globs) > 1:
+                sep = ",\n        "
+                val = f"glob([\n        {sep.join(globs)},\n    ])"
+            else:
+                val = f"glob([{globs[0]}])"
 
         elif len(self.hdrs) == 1 and len(self.hdrs[0]) > 0:
             val = f'["_{self.hdrs[0][1:]}"]'
@@ -160,29 +226,40 @@ class BazelCCImport:
 
         # Overide the dirs if includes was specified on the cc_import
         if self.includes is not None:
-            dirs = set([f'"_{d[1:]}"' for d in self.includes])
+            if len(self.includes) == 1:
+                dirs = set([f'"_{d[1:]}"' for d in self.includes])
+            else:
+                dirs = set([f'"_{d[1:]}"' for d in self.includes])
 
         ret = []
         if not self.skipWrapping:
             ret.append("cc_library(")
             ret.append(f'    name = "{self.name}",')
-            ret.append(f'    deps = [":raw_{self.name}"],')
-            dirs_str = ",".join(sorted([f"{d}" for d in dirs]))
+            if len(dirs) > 1:
+                dirs_str = (
+                    "\n"
+                    + ",\n".join(sorted([f"        {d}" for d in dirs]))
+                    + ",\n    "
+                )
+            else:
+                dirs_str = ",\n".join(sorted([f"{d}" for d in dirs]))
             ret.append(f"    includes = [{dirs_str}],")
             ret.append('    visibility = ["//visibility:public"],')
+            ret.append(f'    deps = [":raw_{self.name}"],')
             ret.append(")")
             ret.append("")
 
             output[self.name] = ret
             ret = []
             # Prefix for the cc_import library, if we wrap we need to add a prefix to avoid collisions
-            prefix="raw_"
+            prefix = "raw_"
         else:
             prefix = ""
 
         ret.append("cc_import(")
-
         ret.append(f'    name = "{prefix}{self.name}",')
+        # buildifier seems to want 2 spaces ..
+        ret.append(f"    hdrs = {val},")
         if self.system_provided:
             ret.append(f'    system_provided = "{self.system_provided}",')
             if self.sharedLibrary is not None:
@@ -194,11 +271,11 @@ class BazelCCImport:
                 ret.append(
                     f'    shared_library = "{self.replaceFirst(self.sharedLibrary)}",'
                 )
-        ret.append(f"    hdrs = {val},")
         if self.staticLibrary is not None:
             ret.append(
                 f'    static_library = "{self.replaceFirst(self.staticLibrary)}",'
             )
+        ret.append('    visibility = ["//visibility:public"],')
         if len(self.deps) > 0:
             ret.append("    deps = [")
             for d in sorted(self.deps):
@@ -207,7 +284,6 @@ class BazelCCImport:
                 else:
                     ret.append(f'        "{d.location}{d.targetName()}",')
             ret.append("    ],")
-        ret.append('    visibility = ["//visibility:public"],')
         ret.append(")")
 
         output[f"raw_{self.name}"] = ret
@@ -220,7 +296,7 @@ class BazelCCImport:
             return f":{self.name}"
 
 
-PostProcess = Callable[[List[str]],List[str]]
+PostProcess = Callable[[List[str]], List[str]]
 
 
 class BazelBuild:
@@ -229,8 +305,10 @@ class BazelBuild:
         self.prefix = prefix
         self.postProcess: Dict[str, PostProcess] = {}
 
-    def addPostProcess(self, targetName: str, targetLocation: str, postProcessCallback: PostProcess):
-        self.postProcess[f"{targetName}{targetLocation}"] = postProcessCallback  
+    def addPostProcess(
+        self, targetName: str, targetLocation: str, postProcessCallback: PostProcess
+    ):
+        self.postProcess[f"{targetName}{targetLocation}"] = postProcessCallback
 
     def genBazelBuildContent(self) -> Dict[str, str]:
         ret: Dict[str, str] = {}
@@ -261,9 +339,9 @@ class BazelBuild:
                 top = topContent.get(location)
                 if not top:
                     top = set()
-                    if not t.location.startswith("@"):
-                        top.update(helper_include)
                 top.add(t.getGlobalImport())
+                if not t.location.startswith("@"):
+                    top.update(helper_include)
                 topContent[location] = top
                 lastLocation = location
             except Exception as e:
@@ -275,15 +353,20 @@ class BazelBuild:
             topStanza = list(filter(lambda x: x != "", v))
             if len(topStanza) > 0:
                 # Force empty line
-                topStanza = sorted(topStanza)
+
+                sort_function = cmp_to_key(compare_imports)
+                topStanza = sorted(topStanza, key=sort_function)
+                topStanza.append("")
                 topStanza.append("")
             logging.info(f"Top content is {topStanza}")
             ret[k] = "\n".join(topStanza)
         for k, v2 in content.items():
             # Add some scaffolding for common options that could be easily tweaked
+            vals = []
             for c in ["copts", "defines", "linkopts"]:
-                ret[k] += f"common_{c}= []\n"
-            ret[k] += "\n".join(v2)
+                vals.append(f"common_{c} = []\n")
+            vals.extend(v2)
+            ret[k] += "\n".join(vals)
         return ret
 
 
@@ -328,7 +411,6 @@ class BaseBazelTarget(object):
     def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
         raise NotImplementedError
 
-
     @cache
     def getAllHeaders(self, deps_only=False) -> Set["BaseBazelTarget"]:
         ret = set()
@@ -344,7 +426,9 @@ class BaseBazelTarget(object):
         return ret
 
     @cache
-    def getAllDeps(self, deps_only=False) -> Set[Union["BaseBazelTarget", BazelCCImport]]:
+    def getAllDeps(
+        self, deps_only=False
+    ) -> Set[Union["BaseBazelTarget", BazelCCImport]]:
         ret = set()
         if not deps_only:
             ret.update(self.deps)
@@ -408,10 +492,10 @@ class BazelTarget(BaseBazelTarget):
         else:
             name = self.name
         return name
-    
+
     def targetName(self):
         return f":{self.depName()}"
-    
+
     def addDep(self, target: Union["BaseBazelTarget", BazelCCImport]):
         self.deps.add(target)
 
@@ -452,7 +536,7 @@ class BazelTarget(BaseBazelTarget):
         ret.append(f'    name = "{name}",')
         deps_headers = set(self.getAllHeaders(deps_only=True))
         deps_deps = set(self.getAllDeps(deps_only=True))
-        deps :Set[Union[BaseBazelTarget, BazelCCImport]]= set()
+        deps: Set[Union[BaseBazelTarget, BazelCCImport]] = set()
         headers = []
         data: List[BaseBazelTarget] = []
         for d in self.deps:
@@ -474,47 +558,6 @@ class BazelTarget(BaseBazelTarget):
                         data.append(h)
 
         sources = [f for f in self.srcs]
-        hm : Dict[str, List[Any]] = {"srcs": sources, "hdrs": headers, "deps": list(deps), "data": data}
-        if self.type == "cc_binary":
-            del hm["hdrs"]
-            sources.extend(headers)
-            headers = []
-
-        def _getPrefix(d: BaseBazelTarget | BazelCCImport):
-            if d.location.startswith("@"):
-                return d.location
-            elif d.location.startswith("//"):
-                return d.location
-            return f"//{d.location}" if d.location != self.location else ""
-
-        for k, v in hm.items():
-            if len(v) > 0:
-                ret.append(f"    {k} = [")
-                # Let's have a different sorting function for deps
-                if k == "deps":
-
-                    def compare_deps(a, b):
-                        ret = 0
-                        if a.location[0] == b.location[0]:
-                            if a == b:
-                                ret = 0
-                            elif a > b:
-                                ret = 1
-                            else:
-                                ret = -1
-                        elif a.location[0] == "@":
-                            ret = -1
-                        else:
-                            ret = 1
-                        return ret
-
-                    sort_function = cmp_to_key(compare_deps)
-                else:
-                    sort_function = lambda x: x
-                for d in sorted(v, key=sort_function):
-                    pathPrefix = _getPrefix(d)
-                    ret.append(f'        "{pathPrefix}{d.targetName()}",')
-                ret.append("    ],")
         copts = set()
         copts.update(self.copts)
         for dir in list(self.includeDirs):
@@ -537,19 +580,47 @@ class BazelTarget(BaseBazelTarget):
             linkopts = ["keep"]
         else:
             linkopts = []
-        textOptions: Dict[str, List[str]] = {
+        textOptions: Dict[str, List[str]] = {}
+
+        hm: Dict[str, List[Any]] = {
+            "srcs": sources,
+            "hdrs": headers,
             "copts": list(copts),
             "defines": list(self.defines),
             "linkopts": linkopts,
+            "data": data,
+            "deps": list(deps),
         }
-        for k, v2 in textOptions.items():
-            if len(v2) > 0:
-                if v2[0] == "keep":
-                    v2 = []
+        if self.type == "cc_binary":
+            del hm["hdrs"]
+            sources.extend(headers)
+            headers = []
+
+        for k, v in hm.items():
+            if len(v) == 0:
+                continue
+            if isinstance(v[0], str):
+                if len(v) > 0:
+                    if v[0] == "keep":
+                        v = []
+                    ret.append(f"    {k} = [")
+                    for to in sorted(v):
+                        ret.append(f"        {to},")
+                    ret.append(f"    ] + common_{k},")
+            else:
                 ret.append(f"    {k} = [")
-                for to in sorted(v2):
-                    ret.append(f"        {to},")
-                ret.append(f"    ] + common_{k},")
+
+                def __getPrefix(d: BaseBazelTarget | BazelCCImport):
+                    return _getPrefix(d, self.location)
+
+                def cmp_deps(a, b):
+                    return compare_deps(a, b, __getPrefix)
+
+                sort_function = cmp_to_key(cmp_deps)
+                for d in sorted(v, key=sort_function):
+                    pathPrefix = __getPrefix(d)
+                    ret.append(f'        "{pathPrefix}{d.targetName()}",')
+                ret.append("    ],")
         ret.append(")")
 
         return {name: ret}
@@ -585,14 +656,23 @@ class BazelGenRuleTarget(BaseBazelTarget):
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
-        hm: Dict[str, Union[Set[BaseBazelTarget], Set[BazelGenRuleTargetOutput]]] = {
+        hm: Dict[
+            str, Union[str, Set[BaseBazelTarget], Set[BazelGenRuleTargetOutput]]
+        ] = {
             "srcs": self.srcs,
             "outs": self.outs,
+            "cmd": self.cmd,
+            "local": str(self.local),
             "tools": self.tools,
         }
         len(self.outs)
         for k, v in hm.items():
-            if len(v) > 0:
+            if isinstance(v, str):
+                if k == "cmd":
+                    ret.append(f'    {k} = """{v}""",')
+                else:
+                    ret.append(f"    {k} = {v},")
+            elif len(v) > 0:
                 ret.append(f"    {k} = [")
                 for d in sorted(v):
                     pathPrefix = (
@@ -600,8 +680,6 @@ class BazelGenRuleTarget(BaseBazelTarget):
                     )
                     ret.append(f'        "{pathPrefix}{d.targetName()}",')
                 ret.append("    ],")
-        ret.append(f'    cmd = """{self.cmd}""",')
-        ret.append(f"    local = {self.local},")
         ret.append(")")
 
         return {self.name: ret}
@@ -680,12 +758,26 @@ class BazelGRPCCCProtoLibrary(BaseBazelTarget):
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
         assert len(self.deps) > 0
-        hm: Dict[str, Set[Any]] = {"srcs": self.srcs, "deps": self.deps}
-        ret.append("    grpc_only = True,")
+        hm: Dict[str, Union[bool, Set[Any]]] = {
+            "srcs": self.srcs,
+            "grpc_only": True,
+            "deps": self.deps,
+        }
         for k, v in hm.items():
-            if len(v) > 0:
+            if isinstance(v, bool):
+                ret.append(f"    {k} = {v},")
+            elif len(v) > 0:
                 ret.append(f"    {k} = [")
-                for d in sorted(v):
+
+                def __getPrefix(d: BaseBazelTarget | BazelCCImport):
+                    return _getPrefix(d, self.location)
+
+                def cmp_deps(a, b):
+                    return compare_deps(a, b, __getPrefix)
+
+                sort_function = cmp_to_key(cmp_deps)
+
+                for d in sorted(v, key=sort_function):
                     if d.location.startswith("@"):
                         pathPrefix = d.location
                     else:
@@ -725,14 +817,24 @@ class BazelProtoLibrary(BaseBazelTarget):
         ret = []
         ret.append(f"{self.type}(")
         ret.append(f'    name = "{self.name}",')
-        if self.stripImportPrefix is not None:
-            ret.append(f'    strip_import_prefix = "{self.stripImportPrefix}",')
 
-        hm: Dict[str, Set[Any]] = {"srcs": self.srcs, "deps": self.deps}
+        hm: Dict[str, Union[Set[Any], str]] = {"srcs": self.srcs}
+        if self.stripImportPrefix is not None:
+            hm["strip_import_prefix"] = self.stripImportPrefix
+        hm["deps"] = self.deps
         for k, v in hm.items():
-            if len(v) > 0:
+            if isinstance(v, str):
+                ret.append(f'    {k} = "{v}",')
+            elif len(v) > 0:
                 ret.append(f"    {k} = [")
-                for d in sorted(v):
+
+                def __getPrefix(d: BaseBazelTarget | BazelCCImport):
+                    return _getPrefix(d, self.location)
+
+                def cmp_deps(a, b):
+                    return compare_deps(a, b, __getPrefix)
+
+                for d in sorted(v, key=cmp_to_key(cmp_deps)):
                     if d.location.startswith("@"):
                         pathPrefix = d.location
                     else:
@@ -841,16 +943,16 @@ class ShBinaryBazelTarget(BaseBazelTarget):
         self.srcs.add(target)
 
 
-cache: Dict[str, Any] = {}
+bazelcache: Dict[str, Any] = {}
 
 
 def getObject(cls: Type[T], *kargs) -> T:
     key = f"{cls}" + " ".join(kargs)
-    obj = cache.get(key)
+    obj = bazelcache.get(key)
     if obj:
         logging.debug(f"Cache hit for {key} {type(obj)}")
         assert isinstance(obj, cls)
         return obj
     obj = cls(*kargs)  # type: ignore
-    cache[key] = obj
+    bazelcache[key] = obj
     return obj
