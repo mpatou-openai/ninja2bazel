@@ -47,7 +47,6 @@ def _findCPPIncludeForFile(
     file: str,
     includes_dirs: Set[str],
     current_dir: str,
-    name: str,
     cc_imports: List[BuildTarget],
     compilerIncludes: List[str],
     generatedFiles: Dict[str, Any],
@@ -144,7 +143,6 @@ def _findCPPIncludeForFile(
             compilerIncludes,
             cc_imports,
             generatedFiles,
-            name,
             use_generated_dir,
         )
         if use_generated_dir:
@@ -170,8 +168,8 @@ def findCPPIncludes(
     compilerIncludes: List[str],
     cc_imports: List[BuildTarget],
     generatedFiles: Dict[str, Any],
-    parent: Optional[str] = None,
     generated: bool = False,
+    generatedDir: Optional[str] = None,
 ) -> CPPIncludes:
     key = f"{name}"
     seenkey = f"{name} {includes_dirs}"
@@ -224,19 +222,31 @@ def findCPPIncludes(
                             )
                             break
                     if not foundGenerated:
+                        # We can't find the relative path because we only know the filename and the current directory
+                        # Let's return the full path, there is code in finiliazeHeadersForFile to deal with it
+                        assert generatedDir is not None
+                        ret.neededGeneratedFiles.add(
+                            (full_file_name.replace(f"{generatedDir}/",""), "/generated")
+                        )
+                        break
+                        logging.info(f"Could not find {full_file_name} in the generated files")
+
+                        # our generated file might need another generated file from the same command
                         logging.error(
                             f"Could not find {full_file_name} in the generated files"
                         )
+                        break
                 else:
                     ret.foundHeaders.add((full_file_name, None))
+
                 cppIncludes = findCPPIncludes(
                     full_file_name,
                     includes_dirs,
                     compilerIncludes,
                     cc_imports,
                     generatedFiles,
-                    name,
                     generated,
+                    generatedDir,
                 )
                 ret += cppIncludes
             else:
@@ -247,7 +257,6 @@ def findCPPIncludes(
                     file,
                     includes_dirs,
                     current_dir,
-                    name,
                     cc_imports,
                     compilerIncludes,
                     generatedFiles,
@@ -261,7 +270,6 @@ def findCPPIncludes(
                 file,
                 includes_dirs,
                 current_dir,
-                name,
                 cc_imports,
                 compilerIncludes,
                 generatedFiles,
@@ -284,7 +292,6 @@ def findCPPIncludes(
                     file,
                     includes_dirs,
                     current_dir,
-                    name,
                     cc_imports,
                     compilerIncludes,
                     generatedFiles,

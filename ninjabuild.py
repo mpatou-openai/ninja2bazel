@@ -506,7 +506,6 @@ class NinjaParser:
         workDir = build.vars.get("cmake_ninja_workdir", "")
         if workDir.endswith(os.path.sep):
             workDir = workDir[:-1]
-        # logging.info(f"Found {f} generated file")
         if isCPPLikeFile(f):
             if self.cacheHeaders.get(f):
                 logging.debug(f"Already processed {f}")
@@ -553,8 +552,8 @@ class NinjaParser:
                 self.compilerIncludes,
                 self.cc_imports,
                 self.generatedFiles,
-                None,
                 True,
+                tempTopFolder,
             )
             if len(cppIncludes.notFoundHeaders) > 0 and includes != "":
                 logging.warning(
@@ -564,7 +563,8 @@ class NinjaParser:
                 logging.info(f"For file {f} found headers {cppIncludes.foundHeaders}")
             for i in build.outputs:
                 if not (i.name.endswith(f) and len(cppIncludes.foundHeaders) > 0):
-                    # Why ?
+                    # We are searching for the generated file(s) that end with f in the current build
+                    # There might be a lot more files we are not interested with it right now
                     continue
                 logging.debug(
                     f"Setting headers for {i.name} {len(cppIncludes.foundHeaders)}"
@@ -574,6 +574,7 @@ class NinjaParser:
                     # It's still possible that the header was added to foundheader with a temporary folder
                     # It happens if header A that is also from the same temporary folder includes header B
                     # from the same folder
+                    # Beware this is for generated files only where we had INCLUDES defined (so most likely .cc files)
                     name = self.getShortName(
                         h[0].replace(tempTopFolder, workDir), workDir
                     )
@@ -605,145 +606,155 @@ class NinjaParser:
                 continue
             # FIXME think about deduping here 
             for i in build.inputs:
-                generated = False
-                filename = None
-                shortedName = i.name.replace(workDir, "")
-                logging.debug(
-                    f"Dealing with {i.name} {shortedName} {isCPPLikeFile(i.name)} {shortedName}"
-                )
-                if isCPPLikeFile(shortedName):
-                    if i.is_a_file:
-                        filename = i.name
-                    elif self.generatedFiles.get(shortedName) is not None:
-                        generated = True
-                        tmp = self.generatedFiles[shortedName]
-                        # tmp is a tuple build / path where the generated file is stored
-                        if tmp[1] is None:
-                            logging.info(f"Path for {tmp[0]} is None skipping")
-                            continue
-                        else:
-                            filename = f"{tmp[1]}/{shortedName}"
-
-                if filename is not None:
-                    includes_dirs = parseIncludes(build.vars.get("INCLUDES", ""))
-                    logging.debug(
-                        f"Looking for header in {filename} with includes {includes_dirs} in {build}"
-                    )
-                    updated_include_dirs = []
-                    for dir in includes_dirs:
-                        if dir.startswith(workDir):
-                            updated_include_dirs.append(
-                                dir.replace(workDir, "/generated")
-                            )
-                        elif workDir.endswith("/") and dir.startswith(workDir[:-1]):
-                            updated_include_dirs.append(
-                                dir.replace(workDir[:-1], "/generated")
-                            )
-                        else:
-                            updated_include_dirs.append(dir)
-
-                    includes_dirs = set(updated_include_dirs)
-                    cppIncludes = findCPPIncludes(
-                        filename,
-                        includes_dirs,
-                        self.compilerIncludes,
-                        self.cc_imports,
-                        self.generatedFiles,
-                        None,  # Parent
-                        generated,
-                    )
-                    if len(cppIncludes.notFoundHeaders) > 0:
-                        for h in cppIncludes.notFoundHeaders:
-                            if h in self.generatedFiles:
-                                if h in self.generatedFilesLogged:
-                                    logging.info(
-                                        f"Found missing header {h} in the generated files"
-                                    )
-                            else:
-                                if h not in self.missingFiles:
-                                    self.missingFiles[h] = []
-                                self.missingFiles[h].append(build)
-                    allIncludes = []
-                    for h2 in list(cppIncludes.foundHeaders):
-                        name = self.getShortName(
-                            h2[0].replace("/generated", workDir), workDir
-                        )
-                        includeDir = h2[1]
-                        allIncludes.append((name[0], includeDir))
-                    i.setIncludedFiles(allIncludes)
-                    i.setDeps(list(cppIncludes.neededImports))
-                    # Add the builds that produce generated files to the current build
-                    # for the current build
-
-                    for h2 in list(cppIncludes.neededGeneratedFiles):
-                        if h2 not in self.generatedFilesLogged:
-                            logging.info(f"Needed generated include file {h2}")
-                            self.generatedFilesLogged.add(h2)
-
-                        if h2[0].endswith(".pb.h"):
-                            # do something else for protobuf like files
-                            for out in self.generatedFiles[h2[0]][0].outputs:
-                                if out.name == h2[0]:
-                                    build.addDep(out)
-                                    # Add the header with a fake name to know where it comes from
-                                    # it *should* be skipped because it's a generated file
-                                    # We need to add it so that the include path is correctly build
-                                    i.addIncludedFile((f"FAKE{h2[0]}", h2[1]))
-                            continue
-                        for bldTgt in self.generatedFiles[h2[0]][0].outputs:
-                            # We do 2 things for generated headers:
-                            # 1. we add them (eventually through generatedOutputNeeded) to the input of the current built
-                            # so that they are a dependency so that we know exactly the name of the target to use
-                            # as the target name might be a mix between the filename and the include path (partial)
-                            # 2. we add it as include too so that the include directory is properly recoreded
-                            includeDir = h2[1]
-                            if bldTgt.name == h2[0]:
-                                logging.debug(
-                                    f"For {filename} need generated file  {h2[0]} requires build target {bldTgt.name}"
-                                )
-                                generatedOutputsNeeded.add(bldTgt)
-                        i.addIncludedFile((h2[0], includeDir))
-                if i.is_a_file and isProtoLikeFile(i.name):
-                    includes_dirs = set()
-                    for part in build.vars.get("COMMAND", "").split("&&"):
-                        if "/protoc" in part:
-                            regex = r"-I ([^ ]+)"
-                            matches = re.findall(regex, part)
-                            includes_dirs.update(matches)
-
-                    protos = findProtoIncludes(i.name, includes_dirs)
-                    logging.info(f"Found proto includes {protos} for {i.name}")
-                    for f, deps in protos.items():
-                        # FIrst create build target for f if it didn't exists already
-                        if f != i.name:
-                            tgt = self._getBuildTarget(f)
-                        else:
-                            tgt = i
-                        for p in deps:
-                            if p[1] == "@":
-                                tgtname = f"@{p[0]}"
-                                logging.debug(f"Adding external dependency {tgtname}")
-                                dep = self._getBuildTarget(tgtname, (tgtname, None))
-                                dep.markAsExternal()
-                                tgt.addDeps(dep)
-                            else:
-                                # p[1] is the include path that was able to find this file
-                                # ie. /opt/code/project/cpp/proto
-                                # and d will be the delta with the work directory (ie. /opt/code/project/) so 
-                                # somthing like cpp/proto
-                                # it's important to know the delta because when calling protoc bazel won't let you provide
-                                # the values for -I and so if there is a delta and we don't strip it bazel won't be able to find the
-                                # included protobuf
-                                (d, _) = self.getShortName(p[1], workDir)
-                                logging.debug(f"Adding internal dependency {p[0]} to {f} ({tgt.name}) delta directory: {d}")
-                                dep = self._getBuildTarget(p[0])
-                                dep.addTargetSpecificParameters({"stripImportPrefix": f"/{d}"})
-                                tgt.addDeps(dep)
-                                #(f, _) = self.getShortName(p[0], workDir)
-                                #f = f.replace(d + os.path.sep, "")
+                generatedOutputsNeeded.update(self._finalizeHeadersForGeneratedFileForBuild(i, build, current_dir, workDir))
             # TODO revisit if we need to extend the inputs o: the dependencies of the build
             # dependencies might have a side effect that is not desirable for generated files
             build.inputs.update(generatedOutputsNeeded)
+
+    def _finalizeHeadersForGeneratedFileForBuild(self, elem: BuildTarget, build: Build, current_dir: str, workDir: str) -> Set[BuildTarget]:
+        generatedOutputsNeeded: Set[BuildTarget] = set()
+        generated = False
+        filename = None
+        tempDirName = None
+        shortedName = elem.name.replace(workDir, "")
+        logging.debug(
+            f"Dealing with {elem.name} {shortedName} {isCPPLikeFile(elem.name)} {shortedName}"
+        )
+        if isCPPLikeFile(shortedName):
+            if elem.is_a_file:
+                filename = elem.name
+            elif self.generatedFiles.get(shortedName) is not None:
+                generated = True
+                tmp = self.generatedFiles[shortedName]
+                tempDirName = tmp[1]
+                # tmp is a tuple build / path where the generated file is stored
+                if tempDirName is None:
+                    logging.info(f"Path for {tmp[0]} is None skipping")
+                    return generatedOutputsNeeded
+                filename = f"{tempDirName}/{shortedName}"
+            else:
+                return generatedOutputsNeeded
+            includes_dirs = parseIncludes(build.vars.get("INCLUDES", ""))
+            logging.debug(
+                f"Looking for header in {filename} with includes {includes_dirs} in {build}"
+            )
+            updated_include_dirs = []
+            for dir in includes_dirs:
+                if dir.startswith(workDir):
+                    updated_include_dirs.append(
+                        dir.replace(workDir, "/generated")
+                    )
+                elif workDir.endswith("/") and dir.startswith(workDir[:-1]):
+                    updated_include_dirs.append(
+                        dir.replace(workDir[:-1], "/generated")
+                    )
+                else:
+                    updated_include_dirs.append(dir)
+
+            includes_dirs = set(updated_include_dirs)
+            cppIncludes = findCPPIncludes(
+                filename,
+                includes_dirs,
+                self.compilerIncludes,
+                self.cc_imports,
+                self.generatedFiles,
+                generated,
+                tempDirName,
+            )
+            if len(cppIncludes.notFoundHeaders) > 0:
+                for h in cppIncludes.notFoundHeaders:
+                    if h in self.generatedFiles:
+                        if h in self.generatedFilesLogged:
+                            logging.info(
+                                f"Found missing header {h} in the generated files"
+                            )
+                    else:
+                        if h not in self.missingFiles:
+                            self.missingFiles[h] = []
+                        self.missingFiles[h].append(build)
+            allIncludes = []
+            for h2 in list(cppIncludes.foundHeaders):
+                name = self.getShortName(
+                    h2[0].replace("/generated", workDir), workDir
+                )
+                includeDir = h2[1]
+                allIncludes.append((name[0], includeDir))
+            elem.setIncludedFiles(allIncludes)
+            elem.setDeps(list(cppIncludes.neededImports))
+            # Add the builds that produce generated files to the current build
+            # for the current build
+
+            for h2 in list(cppIncludes.neededGeneratedFiles):
+                if h2 not in self.generatedFilesLogged:
+                    if tempDirName is not None and h2[0].startswith(tempDirName):
+                        h2 = (h2[0].replace(f"{tempDirName}/", ""), h2[1])
+                    logging.info(f"Needed generated include file {h2}, for {filename}")
+                    self.generatedFilesLogged.add(h2)
+
+                if h2[0].endswith(".pb.h"):
+                    # do something else for protobuf like files
+                    for out in self.generatedFiles[h2[0]][0].outputs:
+                        if out.name == h2[0]:
+                            build.addDep(out)
+                            # Add the header with a fake name to know where it comes from
+                            # it *should* be skipped because it's a generated file
+                            # We need to add it so that the include path is correctly build
+                            elem.addIncludedFile((f"FAKE{h2[0]}", h2[1]))
+                    continue
+                logging.info(f"dirName {tempDirName} {h2[0]}")
+                for bldTgt in self.generatedFiles[h2[0]][0].outputs:
+                    # We do 2 things for generated headers:
+                    # 1. we add them (eventually through generatedOutputNeeded) to the input of the current built
+                    # so that they are a dependency so that we know exactly the name of the target to use
+                    # as the target name might be a mix between the filename and the include path (partial)
+                    # 2. we add it as include too so that the include directory is properly recoreded
+                    includeDir = h2[1]
+                    if bldTgt.name == h2[0]:
+                        logging.debug(
+                            f"For {filename} need generated file  {h2[0]} requires build target {bldTgt.name}"
+                        )
+                        generatedOutputsNeeded.add(bldTgt)
+                elem.addIncludedFile((h2[0], includeDir))
+
+        if elem.is_a_file and isProtoLikeFile(elem.name):
+            includes_dirs = set()
+            for part in build.vars.get("COMMAND", "").split("&&"):
+                if "/protoc" in part:
+                    regex = r"-I ([^ ]+)"
+                    matches = re.findall(regex, part)
+                    includes_dirs.update(matches)
+
+            protos = findProtoIncludes(elem.name, includes_dirs)
+            logging.info(f"Found proto includes {protos} for {elem.name}")
+            for f, deps in protos.items():
+                # FIrst create build target for f if it didn't exists already
+                if f != elem.name:
+                    tgt = self._getBuildTarget(f)
+                else:
+                    tgt = elem 
+                for p in deps:
+                    if p[1] == "@":
+                        tgtname = f"@{p[0]}"
+                        logging.debug(f"Adding external dependency {tgtname}")
+                        dep = self._getBuildTarget(tgtname, (tgtname, None))
+                        dep.markAsExternal()
+                        tgt.addDeps(dep)
+                    else:
+                        # p[1] is the include path that was able to find this file
+                        # ie. /opt/code/project/cpp/proto
+                        # and d will be the delta with the work directory (ie. /opt/code/project/) so 
+                        # somthing like cpp/proto
+                        # it's important to know the delta because when calling protoc bazel won't let you provide
+                        # the values for -I and so if there is a delta and we don't strip it bazel won't be able to find the
+                        # included protobuf
+                        (d, _) = self.getShortName(p[1], workDir)
+                        logging.debug(f"Adding internal dependency {p[0]} to {f} ({tgt.name}) delta directory: {d}")
+                        dep = self._getBuildTarget(p[0])
+                        dep.addTargetSpecificParameters({"stripImportPrefix": f"/{d}"})
+                        tgt.addDeps(dep)
+                        #(f, _) = self.getShortName(p[0], workDir)
+                        #f = f.replace(d + os.path.sep, "")
+        return generatedOutputsNeeded
 
     def _finalizeHeadersForGeneratedFiles(self, current_dir: str):
         trees = []
@@ -756,7 +767,8 @@ class NinjaParser:
                 if ret is None:
                     continue
                 for dirpath, dirname, files in os.walk(ret):
-                    for f in files:
+                    # Put header files first so that they are in the generatedFiles
+                    for f in sorted(files, key=lambda x: not x.endswith(".h")):
                         relative_file = f"{dirpath}/{f}".replace(f"{ret}/", "")
                         # store the filename to build association
                         self.generatedFiles[relative_file] = (build, ret)
