@@ -28,10 +28,11 @@ class BuildVisitor:
     ) -> bool:
         if build.rulename.name != "phony":
             if len(el.usedbybuilds) == 0:
-                logging.warning(
-                    f"Skipping non phony top level target that is not used by anything: {el}"
-                )
-                return False
+                if ctx.current is None:
+                    logging.warning(
+                        f"Skipping non phony top level target that is not used by anything: {el}"
+                    )
+                    return False
             rawCmd = build.getCoreCommand()
 
             if rawCmd is None and build.rulename.name != "CUSTOM_COMMAND":
@@ -59,6 +60,9 @@ class BuildVisitor:
             # by the ctx.producer build
             build = el.producedby
             parentBuild = ctx.producer
+            if el.alias is not None:
+                logging.info(f"Visiting alias {el.alias.name} instead of {el.name}")
+                return visitor(el.alias, ctx, _var)
 
             assert isinstance(ctx, BazelBuildVisitorContext)
             if parentBuild is not None and parentBuild.rulename.name == "phony":

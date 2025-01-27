@@ -352,23 +352,27 @@ class NinjaParser:
         for i in range(len(outputs)):
             o = outputs[i]
             key = str(o)
-            first = None
-            for key in [str(o), str(o).replace(workDir, "")]:
-                t = self.missing.get(key)
-                if t is not None:
-                    del self.missing[key]
-                    t.markAsknown()
-                    if first is None:
-                        outputs[i] = t
-                        o = t
-                    else:
-                        logging.info(f"Setting alias {first.name} to {t.name}")
-                        t.setAlias(first)
-                    first = t
+            logging.info(f"Dealing with output {o.name}")
+            key = str(o) 
+            t = self.missing.get(key)
+            if t is not None:
+                del self.missing[key]
+                t.markAsknown()
+                outputs[i] = t
+                o = t
+            self.all_outputs[str(o)] = o
+
+        # Deals with aliases, it's easier to do a second pass on them once the missing dependencies
+        # have been resolved because we end up changing elements of outputs
+        for i in range(len(outputs)):
+            o = outputs[i]
+            for elem in outputs:
+                if elem.name == f"{workDir}{o.name}":
+                    logging.info(f"Setting alias {o.name} to {elem.name}")
+                    o.setAlias(elem)
             if o.alias is not None:
-                self.all_outputs[str(o.alias)] = o.alias
-            else:
-                self.all_outputs[str(o)] = o
+                self.all_outputs[str(o)] = o.alias
+
         stillMissing = list(self.missing.keys())
         # Hack: ignore dirs
         for m in stillMissing:
