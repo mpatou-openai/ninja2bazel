@@ -229,13 +229,6 @@ def findCPPIncludes(
                             (full_file_name.replace(f"{generatedDir}/",""), "/generated")
                         )
                         break
-                        logging.info(f"Could not find {full_file_name} in the generated files")
-
-                        # our generated file might need another generated file from the same command
-                        logging.error(
-                            f"Could not find {full_file_name} in the generated files"
-                        )
-                        break
                 else:
                     ret.foundHeaders.add((full_file_name, None))
 
