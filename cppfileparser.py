@@ -305,6 +305,7 @@ def findCPPIncludes(
             )
             ret.notFoundHeaders.add(file)
     if len(ret.notFoundHeaders) > 0:
+        ret.notFoundHeaders = set(filter(lambda x: not x.endswith(".pb.h"), ret.notFoundHeaders))
         logging.debug(f"Could not find {set(ret.notFoundHeaders)} in {name}")
     cache[key] = ret
     return ret

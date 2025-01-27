@@ -543,7 +543,7 @@ class NinjaParser:
                     break
             if includes is None:
                 logging.warn(
-                    f"No includes for {target.name} using cmd {build.getCoreCommand()}"
+                    f"No includes (-I) for {target.name} using cmd {build.getCoreCommand()}"
                 )
                 includes = ""
             cppIncludes = findCPPIncludes(
