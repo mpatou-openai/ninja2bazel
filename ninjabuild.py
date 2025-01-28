@@ -495,7 +495,7 @@ class NinjaParser:
     def finiliazeHeadersForFile(
         self,
         target: BuildTarget,
-        f: str,
+        fileName: str,
         fileFolder: str,
         tempTopFolder: str,
         debug: bool = False,
@@ -506,12 +506,12 @@ class NinjaParser:
         workDir = build.vars.get("cmake_ninja_workdir", "")
         if workDir.endswith(os.path.sep):
             workDir = workDir[:-1]
-        if isCPPLikeFile(f):
-            if self.cacheHeaders.get(f):
-                logging.debug(f"Already processed {f}")
+        if isCPPLikeFile(fileName):
+            if self.cacheHeaders.get(fileName):
+                logging.debug(f"Already processed {fileName}")
                 return
             else:
-                logging.debug(f"Processing {f}")
+                logging.debug(f"Processing {fileName}")
 
             includes_dirs: Set[str] = set()
             includes = None
@@ -547,7 +547,7 @@ class NinjaParser:
                 )
                 includes = ""
             cppIncludes = findCPPIncludes(
-                os.path.sep.join([fileFolder, f]),
+                os.path.sep.join([fileFolder, fileName]),
                 includes_dirs,
                 self.compilerIncludes,
                 self.cc_imports,
@@ -557,12 +557,12 @@ class NinjaParser:
             )
             if len(cppIncludes.notFoundHeaders) > 0 and includes != "":
                 logging.warning(
-                    f"Couldn't find {cppIncludes.notFoundHeaders} headers for generated file {f}"
+                    f"Couldn't find {cppIncludes.notFoundHeaders} headers for generated file {fileName}"
                 )
             if debug:
-                logging.info(f"For file {f} found headers {cppIncludes.foundHeaders}")
+                logging.info(f"For file {fileName} found headers {cppIncludes.foundHeaders}")
             for i in build.outputs:
-                if not (i.name.endswith(f) and len(cppIncludes.foundHeaders) > 0):
+                if not (i.name.endswith(fileName) and len(cppIncludes.foundHeaders) > 0):
                     # We are searching for the generated file(s) that end with f in the current build
                     # There might be a lot more files we are not interested with it right now
                     continue
@@ -591,7 +591,7 @@ class NinjaParser:
 
                 i.setIncludedFiles(allIncludes)
                 i.setDeps(list(cppIncludes.neededImports))
-            self.cacheHeaders[f] = cppIncludes
+            self.cacheHeaders[fileName] = cppIncludes
 
     def _finalizeHeadersForNonGeneratedFiles(self, current_dir: str):
         logging.info(f"There are {len(self.all_outputs.values())} outputs")
