@@ -50,6 +50,7 @@ def _findCPPIncludeForFile(
     cc_imports: List[BuildTarget],
     compilerIncludes: List[str],
     generatedFiles: Dict[str, Any],
+    generatedDir: Optional[str],
 ) -> Tuple[bool, CPPIncludes]:
     found = False
     ret = CPPIncludes(set(), set(), set(), set())
@@ -148,6 +149,7 @@ def _findCPPIncludeForFile(
             cc_imports,
             generatedFiles,
             use_generated_dir,
+            generatedDir,
         )
         if use_generated_dir:
             newfoundHeaders = set()
@@ -246,7 +248,6 @@ def findCPPIncludes(
                     generatedDir,
                 )
                 ret += cppIncludes
-            else:
                 if len(includes_dirs) == 0:
                     empty = CPPIncludes(set(), set(), set(), set())
                     return empty
@@ -257,6 +258,7 @@ def findCPPIncludes(
                     cc_imports,
                     compilerIncludes,
                     generatedFiles,
+                    generatedDir,
                 )
                 ret += cppIncludes
         else:
@@ -270,6 +272,7 @@ def findCPPIncludes(
                 cc_imports,
                 compilerIncludes,
                 generatedFiles,
+                generatedDir,
             )
             ret += cppIncludes
 
@@ -292,6 +295,7 @@ def findCPPIncludes(
                     cc_imports,
                     compilerIncludes,
                     generatedFiles,
+                    generatedDir
                 )
                 ret += cppIncludes
                 found = True
