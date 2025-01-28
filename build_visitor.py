@@ -65,17 +65,15 @@ class BuildVisitor:
                 return visitor(el.alias, ctx, _var)
 
             assert isinstance(ctx, BazelBuildVisitorContext)
-            if parentBuild is not None and parentBuild.rulename.name == "phony":
-                pass
+            # FIXME this is most probably wrong after all and should be removed
             if (
                 parentBuild is not None and
                 ctx.parentIsPhony and
                 ctx.current is None
             ):
-                logging.info(
-                    f"Skipping {el.name} {showParentBuildDetail(parentBuild)} because it's a chain of empty targets"
-                )
-                return False
+                pass
+                #logging.info( f"Skipping {el.name} {showParentBuildDetail(parentBuild)} because it's a chain of empty targets")
+                #return False
             if el.producedby is not None:
                 build = el.producedby
                 return BuildVisitor.visitProduced(ctx, el, build)
