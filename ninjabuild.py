@@ -546,6 +546,7 @@ class NinjaParser:
                     f"No includes (-I) for {target.name} using cmd {build.getCoreCommand()}"
                 )
                 includes = ""
+                return
             cppIncludes = findCPPIncludes(
                 os.path.sep.join([fileFolder, fileName]),
                 includes_dirs,
