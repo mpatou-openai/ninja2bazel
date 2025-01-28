@@ -167,6 +167,74 @@ def _findCPPIncludeForFile(
         ret += cppIncludes
     return found, ret
 
+def _findCPPIncludeForFileSameDir(
+    name: str,
+    file: str,
+    includes_dirs: Set[str],
+    current_dir: str,
+    cc_imports: List[BuildTarget],
+    compilerIncludes: List[str],
+    generatedFiles: Dict[str, Any],
+    generatedDir: Optional[str],
+    generated: bool = False,
+    ) -> Tuple[bool, CPPIncludes]:
+        ret = CPPIncludes(set(), set(), set(), set())
+        found = False
+        full_file_name = f"{current_dir}/{file}"
+        if not (os.path.exists(full_file_name) and not os.path.isdir(full_file_name)):
+            return False, ret
+
+        found = True
+        logging.debug(
+            f"Found {file} in the same directory as the looked file generated {generated}"
+        )
+        # We need a way of dealing with path with ..
+        full_file_name = resolvePath(full_file_name)
+        # Current file is generated so we are in some /tmp/tmpxxbbcc path and
+        # in this path we find `file` so it's safe to return "/generated"
+        if generated:
+            # full_file_name will have the same base folder (ie. /tmp/tmpxxbbcc) as the current file
+            # it's ok we cppIncludes will take care of it
+
+            # So this is tricky we don't know the generic name here only the resolved one and removing the folder of the file where we
+            # found this include won't help because it's most probably not the one used in generatedFiles dict.
+            # So we will need to iterate on the dict look for the values
+            foundGenerated = False
+            for k, v in generatedFiles.items():
+                #logging.info(f"Checking {k} against {name}")
+                if name.endswith(k):
+                    foundGenerated = True
+                    genericGeneratedHeader = f"{name.replace(v[1]+'/','').replace(os.path.basename(k), file)}"
+                    ret.neededGeneratedFiles.add(
+                        (genericGeneratedHeader, "/generated")
+                    )
+                    break
+            if not foundGenerated:
+                # We can't find the relative path because we only know the filename and the current directory
+                # So let's try to use the generatedDir that was passed as an argument to hopefully remove the prefix
+                assert generatedDir is not None
+                tmp = full_file_name.replace(f"{generatedDir}/","")
+                if tmp.startswith("/"):
+                    logging.error(f"Could not find the relative path for {file} in the generated files")
+                ret.neededGeneratedFiles.add(
+                    (tmp, "/generated")
+                )
+                return False, ret
+        else:
+            ret.foundHeaders.add((full_file_name, None))
+
+        cppIncludes = findCPPIncludes(
+            full_file_name,
+            includes_dirs,
+            compilerIncludes,
+            cc_imports,
+            generatedFiles,
+            generated,
+            generatedDir,
+        )
+        ret += cppIncludes
+        return found, ret
+
 
 def findCPPIncludes(
     name: str,
@@ -200,54 +268,18 @@ def findCPPIncludes(
         file = current_include[1:-1]
 
         if current_include.startswith('"'):
-            full_file_name = f"{current_dir}/{file}"
-            if os.path.exists(full_file_name) and not os.path.isdir(full_file_name):
-                found = True
-                logging.debug(
-                    f"Found {file} in the same directory as the looked file generated {generated}"
-                )
-                # We need a way of dealing with path with ..
-                full_file_name = resolvePath(full_file_name)
-                # Current file is generated so we are in some /tmp/tmpxxbbcc path and
-                # in this path we find `file` so it's safe to return "/generated"
-                if generated:
-                    # full_file_name will have the same base folder (ie. /tmp/tmpxxbbcc) as the current file
-                    # it's ok we cppIncludes will take care of it
-
-                    # So this is tricky we don't know the generic name here only the resolved one and removing the folder of the file where we
-                    # found this include won't help because it's most probably not the one used in generatedFiles dict.
-                    # So we will need to iterate on the dict look for the values
-                    foundGenerated = False
-                    for k, v in generatedFiles.items():
-                        #logging.info(f"Checking {k} against {name}")
-                        if name.endswith(k):
-                            foundGenerated = True
-                            genericGeneratedHeader = f"{name.replace(v[1]+'/','').replace(os.path.basename(k), file)}"
-                            ret.neededGeneratedFiles.add(
-                                (genericGeneratedHeader, "/generated")
-                            )
-                            break
-                    if not foundGenerated:
-                        # We can't find the relative path because we only know the filename and the current directory
-                        # Let's return the full path, there is code in finiliazeHeadersForFile to deal with it
-                        assert generatedDir is not None
-                        ret.neededGeneratedFiles.add(
-                            (full_file_name.replace(f"{generatedDir}/",""), "/generated")
-                        )
-                        break
-                else:
-                    ret.foundHeaders.add((full_file_name, None))
-
-                cppIncludes = findCPPIncludes(
-                    full_file_name,
-                    includes_dirs,
-                    compilerIncludes,
-                    cc_imports,
-                    generatedFiles,
-                    generated,
-                    generatedDir,
-                )
-                ret += cppIncludes
+            found, cppIncludes = _findCPPIncludeForFileSameDir(
+                name,
+                file,
+                includes_dirs,
+                current_dir,
+                cc_imports,
+                compilerIncludes,
+                generatedFiles,
+                generatedDir,
+                generated,
+            )
+            if not found:
                 if len(includes_dirs) == 0:
                     empty = CPPIncludes(set(), set(), set(), set())
                     return empty
@@ -260,6 +292,8 @@ def findCPPIncludes(
                     generatedFiles,
                     generatedDir,
                 )
+                ret += cppIncludes
+            else:
                 ret += cppIncludes
         else:
             if len(includes_dirs) == 0:
