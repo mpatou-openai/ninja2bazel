@@ -128,7 +128,11 @@ def _findCPPIncludeForFile(
         if not use_generated_dir:
             # If generated dir is True it means that the header was found using a generated dir include
             # we don't want to add it as is to the list of headers otherwise we will have a "/tmp" and it won't be great
-            ret.foundHeaders.add((full_file_name, d))
+            if generatedDir and d == generatedDir:
+                ret.foundHeaders.add((full_file_name.replace(f"{generatedDir}/", ""), "/generated"))
+            else:
+                logging.info(f"Found {file}  {full_file_name} in the includes variable using {d}")
+                ret.foundHeaders.add((full_file_name, d))
         else:
             ret.neededGeneratedFiles.add(("/generated" + generatedFileFullName, d))
 
