@@ -830,7 +830,6 @@ class Build:
                         break
                 for inFile in self.inputs:
                     inputName = inFile.name.replace(f"{ctx.rootdir}", "")
-                    logging.info(f"Checking {inputName} against {arg} {ctx.rootdir}")
                     if inputName == arg:
                         inputLocation = BuildFileGroupingStrategy().getBuildFilenamePathFromFilename(
                             inputName
