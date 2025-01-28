@@ -758,6 +758,7 @@ class NinjaParser:
 
     def _finalizeHeadersForGeneratedFiles(self, current_dir: str):
         trees = []
+        filesToVisit = set()
         for t in self.all_outputs.values():
             build = t.producedby
             if not build:
@@ -771,9 +772,13 @@ class NinjaParser:
                     for f in sorted(files, key=lambda x: not x.endswith(".h")):
                         relative_file = f"{dirpath}/{f}".replace(f"{ret}/", "")
                         # store the filename to build association
+                        filesToVisit.add((t, f, dirpath, ret))
                         self.generatedFiles[relative_file] = (build, ret)
-                        self.finiliazeHeadersForFile(t, f, dirpath, ret, False)
                 trees.append(ret)
+
+        # This needs to be done separately because we migth not know all the generated files when looking at file f
+        for (t, f, dirpath, ret) in filesToVisit:
+            self.finiliazeHeadersForFile(t, f, dirpath, ret, False)
         return trees
 
     def finalizeHeaders(self, current_dir: str):
