@@ -889,6 +889,31 @@ class NinjaParser:
         return
 
         ctx = PrunedVisitorContext()
+    
+    def debugGraph(self):
+        start = self.all_outputs["all"]
+        self.visited = set()
+
+        self._visitGraph(start)
+
+    def _visitGraph(self, target: BuildTarget):
+        
+        if target in self.visited:
+            logging.info(f"Already visited {target.name}")
+            return
+        else:
+            logging.info(f"Visiting {target.name}")
+            self.visited.add(target)
+        build = target.producedby
+        if build is None:
+            return
+        for tgt in build.getInputs():
+            logging.info(f"Visiting input {tgt.name}")
+            #self._visitGraph(tgt)
+        for tgt in build.depends:
+            logging.info(f"Visiting depend{tgt.name}")
+            #self._visitGraph(tgt)
+
     def _visitGraphToPrune(self, build: Build, ctx: PrunedVisitorContext, parentBuild: Optional[Build] = None, attribute: Optional[str] = None, index: Optional[int] = None):
         if build in ctx.visited:
             return
@@ -991,6 +1016,7 @@ def getBuildTargets(
     logging.info("Parsing done")
     parser.endContext(ninjaFileName)
     parser.resolveAliases()
+    parser.debugGraph()
 
     if len(parser.missing) != 0:
         logging.error(
