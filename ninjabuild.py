@@ -886,12 +886,10 @@ class NinjaParser:
         #FIXME 
         # revist that at some point
         startingBuild = self.all_outputs["all"].producedby
+        return
 
         ctx = PrunedVisitorContext()
-        self._visitGraph(startingBuild, ctx) 
-
-
-    def _visitGraph(self, build: Build, ctx: PrunedVisitorContext, parentBuild: Optional[Build] = None, attribute: Optional[str] = None, index: Optional[int] = None):
+    def _visitGraphToPrune(self, build: Build, ctx: PrunedVisitorContext, parentBuild: Optional[Build] = None, attribute: Optional[str] = None, index: Optional[int] = None):
         if build in ctx.visited:
             return
         else:
@@ -903,7 +901,7 @@ class NinjaParser:
                 if childBuild is not None:
                     if childBuild.rulename.name == "phony":
                         pass
-                    self._visitGraph(childBuild, ctx, build, attr, i)
+                    self._visitGraphToPrune(childBuild, ctx, build, attr, i)
         # We want to do that after we have visited all the inputs / depends
         if canBePruned(build) and attribute is not None:
             logging.info(f"Pruning {build}")
@@ -993,7 +991,6 @@ def getBuildTargets(
     logging.info("Parsing done")
     parser.endContext(ninjaFileName)
     parser.resolveAliases()
-    parser.pruneTransitivePhonyTargets()
 
     if len(parser.missing) != 0:
         logging.error(
