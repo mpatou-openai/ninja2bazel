@@ -482,15 +482,21 @@ class BazelTarget(BaseBazelTarget):
         self.defines.add(define)
 
     def depName(self):
+        name = self.name
+        name = name.replace("/", "_")
         if self.type == "cc_library" or self.type == "cc_shared_library":
-            if not self.name.startswith("lib") and self.addPrefixIfRequired:
-                name = f"lib{self.name}"
+            if not name.startswith("lib") and self.addPrefixIfRequired:
+                name = f"lib{name}"
+            elif self.addPrefixIfRequired:
+                name = f"lib{name.replace('_lib', '')}"
             else:
-                name = self.name
+                name = name
             name = name.replace(".a", "")
             name = name.replace(".so", "")
-        else:
-            name = self.name
+        elif self.type == "cc_test":
+            name = f"test_{name}"
+            if name.endswith("_test"):
+                name = name[:-5]
         return name
 
     def targetName(self):
@@ -591,7 +597,7 @@ class BazelTarget(BaseBazelTarget):
             "data": data,
             "deps": list(deps),
         }
-        if self.type == "cc_binary":
+        if self.type == "cc_binary" or self.type == "cc_test":
             del hm["hdrs"]
             sources.extend(headers)
             headers = []

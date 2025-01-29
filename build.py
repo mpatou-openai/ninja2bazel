@@ -1000,6 +1000,7 @@ class Build:
     ) -> bool:
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         if self.associatedBazelTarget is None:
+            #FIXME maybe a cc_test here ?
             t = getObject(BazelTarget, "cc_binary", el.name, location)
             nextCurrent = t
             ctx.bazelbuild.bazelTargets.add(t)
@@ -1021,7 +1022,7 @@ class Build:
         continueVisit = True
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         if self.associatedBazelTarget is None:
-            logging.info(f"Creating cc_library/cc_binary for {el.name}")
+            logging.info(f"Creating cc_library/cc_binary/cc_test for {el.name}")
             if self.vars.get("SONAME") is not None:
                 staticLibTarget = getObject(
                     BazelTarget,
@@ -1044,7 +1045,10 @@ class Build:
                 # Bazel wants only libraries not shared as dependencies
                 t = staticLibTarget
             else:
-                t = getObject(BazelTarget, "cc_binary", el.name, location)
+                if el.name.endswith("_test"):
+                    t = getObject(BazelTarget, "cc_test", el.name, location)
+                else:
+                    t = getObject(BazelTarget, "cc_binary", el.name, location)
                 nextCurrent = t
             ctx.bazelbuild.bazelTargets.add(t)
             self.setAssociatedBazelTarget(t)
