@@ -35,6 +35,10 @@ IGNORED_TARGETS = [
     "install/strip",
 ]
 
+COMPILELIB_TO_CCIMPORTLIB = {
+    "m": "libm",
+    
+}
 
 def _copyFilesBackNForth(sourceDir, destDir):
     # Ensure the destination directory exists, create it if it doesn't
