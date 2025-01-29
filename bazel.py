@@ -2,8 +2,8 @@ import logging
 import os
 import re
 from functools import cache, cmp_to_key, total_ordering
-from typing import (Any, Callable, Dict, List, Optional, Set, Type, TypeVar,
-                    Union)
+from typing import (Any, Callable, Dict, Generator, List, Optional, Set, Type,
+                    TypeVar, Union)
 
 BazelTargetStrings = Dict[str, List[str]]
 # Define a type variable that can be any type
@@ -298,12 +298,57 @@ class BazelCCImport:
 
 PostProcess = Callable[[List[str]], List[str]]
 
+from itertools import combinations
+
+def find_common_subsets(arrays: List[Set[T]]) -> List[Set[T]]:
+    n = len(arrays)
+    common_sets = {}
+
+    lowerBound = int(n * 0.95)
+    logging.info(f"Lower bound is {lowerBound}")
+    logging.info(range(lowerBound, n))
+    # Check for common elements in all possible combinations of arrays
+    for r in range(lowerBound, n + 1):  # At least 2 arrays should have common items
+        for subset in combinations(range(n), r):
+            intersect_set = set(arrays[subset[0]])
+            for index in subset[1:]:
+                intersect_set.intersection_update(arrays[index])
+
+            if intersect_set:
+                common_sets[frozenset(subset)] = intersect_set
+
+    logging.info(f"Common sets {common_sets}")
+
+    # Deduplicate: Remove subsets that are already covered in larger sets
+    unique_results = {}
+    for key, value in common_sets.items():
+        if not any(value < common_sets[other_key] for other_key in common_sets if key != other_key):
+            unique_results[key] = value
+
+    return list(unique_results.values())
+
+def find_common_subset(sets: List[Set[T]]) -> Set[T]:
+    common = set.intersection(*sets)
+
+    return common
+
 
 class BazelBuild:
     def __init__(self: "BazelBuild", prefix: str):
         self.bazelTargets: Set[Union["BaseBazelTarget", "BazelCCImport"]] = set()
         self.prefix = prefix
         self.postProcess: Dict[str, PostProcess] = {}
+
+    def cleanup(self: "BazelBuild") -> None:
+        for type in [ "cc_binary", "cc_library", "cc_test" ]:
+
+            allCopt: List[Set[str]] = []
+            for t in self.bazelTargets:
+                if isinstance(t, BazelTarget):
+                    allCopt.append(t.copts)
+
+            inCommon = find_common_subset(allCopt)
+            logging.info(f"In common {inCommon}")
 
     def addPostProcess(
         self, targetName: str, targetLocation: str, postProcessCallback: PostProcess
@@ -422,7 +467,6 @@ class BaseBazelTarget(object):
             except AttributeError:
                 logging.warn(f"Can't get headers for {d.name}")
                 raise
-        logging.info(f"Returning for {self.name} {len(ret)} headers")
         return ret
 
     @cache

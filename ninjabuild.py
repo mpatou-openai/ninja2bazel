@@ -9,7 +9,7 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from bazel import BazelBuild, BazelCCImport
+from bazel import BazelBuild, BazelCCImport, BazelTarget
 from build import (Build, BuildTarget, Rule, TargetType,
                    TopLevelGroupingStrategy)
 from build_visitor import (BazelBuildVisitorContext, BuildVisitor,
@@ -1061,5 +1061,7 @@ def genBazelBuildFiles(
     for e in sorted(top_levels):
         e.markTopLevel()
         genBazel(e, bb, rootdir)
+
+    bb.cleanup()
 
     return bb.genBazelBuildContent()
