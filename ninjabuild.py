@@ -781,7 +781,8 @@ class NinjaParser:
 
         # This needs to be done separately because we migth not know all the generated files when looking at file f
         for (t, f, dirpath, ret) in filesToVisit:
-            self.finiliazeHeadersForFile(t, f, dirpath, ret, False)
+            pass 
+            #self.finiliazeHeadersForFile(t, f, dirpath, ret, False)
         return trees
 
     def finalizeHeaders(self, current_dir: str):
