@@ -544,7 +544,7 @@ class Build:
                     ctx.current.addDep(any_cc_proto)
                     ctx.bazelbuild.bazelTargets.add(any_cc_proto)
                 else:
-                    logging.info(
+                    logging.debug(
                         f"Adding {maybe_cc_import.name} to {ctx.current.name} for external libray {el.name}"
                     )
                     ctx.current.addDep(maybe_cc_import)
