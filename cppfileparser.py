@@ -243,7 +243,7 @@ def _findCPPIncludeForFileSameDir(
 
 def findCPPIncludes(
     name: str,
-    includes_dirs: Set[str],
+    includes_dirs: List[str],
     compilerIncludes: List[str],
     cc_imports: List[BuildTarget],
     generatedFiles: Dict[str, Any],

@@ -614,6 +614,7 @@ class NinjaParser:
 
     def _finalizeHeadersForGeneratedFileForBuild(self, elem: BuildTarget, build: Build, current_dir: str, workDir: str) -> Set[BuildTarget]:
         generatedOutputsNeeded: Set[BuildTarget] = set()
+        includes_dirs: List[str] = []
         generated = False
         filename = None
         tempDirName = None
@@ -652,10 +653,9 @@ class NinjaParser:
                 else:
                     updated_include_dirs.append(dir)
 
-            includes_dirs = set(updated_include_dirs)
             cppIncludes = findCPPIncludes(
                 filename,
-                includes_dirs,
+                updated_include_dirs,
                 self.compilerIncludes,
                 self.cc_imports,
                 self.generatedFiles,
@@ -718,12 +718,13 @@ class NinjaParser:
                 elem.addIncludedFile((h2[0], includeDir))
 
         if elem.is_a_file and isProtoLikeFile(elem.name):
-            includes_dirs = set()
             for part in build.vars.get("COMMAND", "").split("&&"):
                 if "/protoc" in part:
                     regex = r"-I ([^ ]+)"
                     matches = re.findall(regex, part)
-                    includes_dirs.update(matches)
+                    for match in matches:
+                        if match not in includes_dirs:
+                            includes_dirs.append(match)
 
             protos = findProtoIncludes(elem.name, includes_dirs)
             logging.info(f"Found proto includes {protos} for {elem.name}")
