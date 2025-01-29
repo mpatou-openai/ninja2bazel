@@ -6,7 +6,7 @@ from typing import Dict, List, Set, Tuple
 seen = set()
 cache: Dict[str, Dict[str, List[Tuple[str, str]]]] = {}
 
-def findProtoIncludes(name: str, includeDirs: Set[str]) -> Dict[str, List[Tuple[str, str]]]:
+def findProtoIncludes(name: str, includeDirs: List[str]) -> Dict[str, List[Tuple[str, str]]]:
     key = f"{name} {includeDirs}"
     # There is sometimes loop, as we don't really implement the #pragma once
     # deal with it

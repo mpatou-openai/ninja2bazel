@@ -513,7 +513,7 @@ class NinjaParser:
             else:
                 logging.debug(f"Processing {fileName}")
 
-            includes_dirs: Set[str] = set()
+            includes_dirs: List[str] = []
             includes = None
             for b in target.usedbybuilds:
                 includes = b.vars.get("INCLUDES", "")
@@ -538,7 +538,7 @@ class NinjaParser:
                         else:
                             updated_include_dirs.append(dir)
 
-                    includes_dirs = set(updated_include_dirs)
+                    includes_dirs = updated_include_dirs
 
                     break
             if includes is None:

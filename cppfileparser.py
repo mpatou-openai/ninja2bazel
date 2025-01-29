@@ -16,9 +16,14 @@ def findAllHeaderFiles(current_dir: str) -> Generator[str, None, None]:
                 yield (f"{dirpath}/{f}")
 
 
-def parseIncludes(includes: str) -> Set[str]:
+def parseIncludes(includes: str) -> List[str]:
+    ret = []
     matches = re.findall(r"-I([^ ](?:[^ ]|(?: (?!(?:-I)|(?:-isystem)|$)))+)", includes)
-    return set(matches)
+    for m in matches:
+        if m not in  ret:
+            ret.append(m)
+
+    return ret
 
 
 seen = set()
@@ -45,7 +50,7 @@ cache: Dict[str, CPPIncludes] = {}
 
 def _findCPPIncludeForFile(
     file: str,
-    includes_dirs: Set[str],
+    includes_dirs: List[str],
     current_dir: str,
     cc_imports: List[BuildTarget],
     compilerIncludes: List[str],
@@ -170,7 +175,7 @@ def _findCPPIncludeForFile(
 def _findCPPIncludeForFileSameDir(
     name: str,
     file: str,
-    includes_dirs: Set[str],
+    includes_dirs: List[str],
     current_dir: str,
     cc_imports: List[BuildTarget],
     compilerIncludes: List[str],
