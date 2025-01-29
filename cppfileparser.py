@@ -62,7 +62,7 @@ def _findCPPIncludeForFile(
     check = False
 
     logging.info(f"_findCPPIncludeForFile: {file}")
-
+    
     for d in includes_dirs:
         use_generated_dir = False
         if d == "/generated":

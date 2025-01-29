@@ -36,7 +36,7 @@ class BuildVisitor:
             rawCmd = build.getCoreCommand()
 
             if rawCmd is None and build.rulename.name != "CUSTOM_COMMAND":
-                logging.warning(f"{el} has no valid command {build.inputs}")
+                logging.warning(f"{el} has no valid command {build.getInputs()}")
                 logging.warning(
                     f"Didn't find a valid command in {build.getRawcommand()}"
                 )

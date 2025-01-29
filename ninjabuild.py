@@ -606,11 +606,12 @@ class NinjaParser:
                 # We don't want to deal with phony targets
                 continue
             # FIXME think about deduping here 
-            for i in build.inputs:
+            for i in build.getInputs():
                 generatedOutputsNeeded.update(self._finalizeHeadersForGeneratedFileForBuild(i, build, current_dir, workDir))
             # TODO revisit if we need to extend the inputs o: the dependencies of the build
             # dependencies might have a side effect that is not desirable for generated files
-            build.inputs.update(generatedOutputsNeeded)
+            for g in generatedOutputsNeeded:
+                build.addInput(g)
 
     def _finalizeHeadersForGeneratedFileForBuild(self, elem: BuildTarget, build: Build, current_dir: str, workDir: str) -> Set[BuildTarget]:
         generatedOutputsNeeded: Set[BuildTarget] = set()
@@ -913,14 +914,14 @@ class NinjaParser:
             build.needPruning()
             newElements = list(getattr(parentBuild, attribute))
             newElements[index] = None
-            for input in build.inputs:
+            for input in build.getInputs():
                 newElements.append(input)
             setattr(parentBuild, attribute, set(filter(lambda x: x is not None, newElements)))
 
 
     def resolveAliases(self):
         for b in self.buildEdges:
-            for attr in ["inputs", "depends"]:
+            for attr in ["_inputs", "depends"]:
                 elem = list(getattr(b, attr))
                 changed = False
                 for i in range(len(elem)):
@@ -934,9 +935,9 @@ class NinjaParser:
 def canBePruned(b: Build) -> bool:
     if b.rulename.name != "phony":
         return False
-    if len(b.inputs) == 0:
+    if len(b.getInputs()) == 0:
         return True
-    for i in b.inputs:
+    for i in b.getInputs():
         if i.producedby is None:
             return False
         if i.producedby.rulename.name != "phony":
@@ -948,7 +949,7 @@ def getToplevels(parser: NinjaParser) -> List[BuildTarget]:
     if b is None:
         logging.error("Couldn't find a build for all")
         return []
-    return list(b.inputs)
+    return list(b.getInputs())
 
 def _printNiceDict(d: dict[str, Any]) -> str:
     return "".join([f"  {k}: {v}\n" for k, v in d.items()])

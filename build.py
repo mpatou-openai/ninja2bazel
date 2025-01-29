@@ -278,7 +278,7 @@ class BuildTarget:
 
         for d in self.producedby.depends:
             if d.producedby and d.producedby.rulename.name == "phony":
-                if len(d.producedby.inputs) == 0 and len(d.producedby.depends) == 0:
+                if len(d.producedby.getInputs()) == 0 and len(d.producedby.depends) == 0:
                     return True
                 # Treat the case where the phony target has a ctest command as virtual
                 if "/ctest " in d.producedby.vars.get("COMMAND", ""):
@@ -299,7 +299,7 @@ class BuildTarget:
         if self.is_a_file or not (
             self.producedby
             and self.producedby.rulename.name == "phony"
-            and len(self.producedby.inputs) == 0
+            and len(self.producedby.getInputs()) == 0
             and len(self.producedby.depends) == 0
         ):
             try:
@@ -317,7 +317,7 @@ class BuildTarget:
                 logging.error(f"Error visiting {self.name} used by {usedBy}: {e} ")
                 raise
         if self.producedby:
-            for el in sorted(self.producedby.inputs):
+            for el in sorted(self.producedby.getInputs()):
                 newctx = ctx.setup_subcontext()
                 newctx.producer = self.producedby
                 newctx.parentIsPhony = False
@@ -377,21 +377,32 @@ class Build:
         self.outputs: List[BuildTarget] = outputs
         self.rulename: Rule = rulename
         self.includes: Set[Tuple[str, str]] = set()
-        self.inputs: Set[BuildTarget] = set(inputs)
-        self.depends: Set[BuildTarget] = set(depends)
+        self._inputs: List[BuildTarget] = []
+        for i in inputs:
+            if i not in self._inputs:
+                self._inputs.append(i)
+                i.usedby(self)
+        self.depends: List[BuildTarget] = []
+        for d in depends:
+            if d not in self.depends:
+                self.depends.append(d)
+                d.usedby(self)
         self.associatedBazelTarget: Optional[BaseBazelTarget] = None
         self.pruned = False
 
         for o in self.outputs:
             o.producedby = self
 
-        for i in self.inputs:
+        self.vars: Dict[str, str] = {}
+
+    def getInputs(self) -> List[BuildTarget]:
+        return self._inputs
+    
+    def addInput(self, i: BuildTarget):
+        if i not in self._inputs:
+            self._inputs.append(i)
             i.usedby(self)
 
-        for d in self.depends:
-            d.usedby(self)
-
-        self.vars: Dict[str, str] = {}
 
     def needPruning(self, status: bool = True):
         self.pruned = status
@@ -760,7 +771,7 @@ class Build:
             # allInputs is all the inputs with the rootdir stripped
             allInputs: List[str] = []
             regex = f"^{ctx.rootdir}/?"
-            for i in self.inputs:
+            for i in self._inputs:
                 allInputs.append(re.sub(regex, "", i.name))
             regex = f"{ctx.rootdir}/?"
             cmd = re.sub(regex, "", cmd)
@@ -770,7 +781,7 @@ class Build:
             arr: List[str] = list(filter(lambda x: x != "", cmdCopy.split(" ")))
 
             for e in arr[1:]:
-                if e in self.inputs:
+                if e in self._inputs:
                     genTarget.addSrc(self._genExportedFile(e, genTarget.location))
             outDirs = set()
             outFiles = set()
@@ -828,7 +839,7 @@ class Build:
                         countRewrote += 1
                         found = True
                         break
-                for inFile in self.inputs:
+                for inFile in self._inputs:
                     inputName = inFile.name.replace(f"{ctx.rootdir}", "")
                     if inputName == arg:
                         inputLocation = BuildFileGroupingStrategy().getBuildFilenamePathFromFilename(
@@ -1136,7 +1147,7 @@ class Build:
                 # logging.debug(f"Adding flag {flag} to copt into {ctx.current.name} {el.name}")
                 ctx.current.addCopt(f'"{flag}"')
 
-        for i in build.inputs:
+        for i in build._inputs:
             # Most of it it dealt by HandleFileForBazel
             if i.type == TargetType.manually_generated:
                 continue
@@ -1162,7 +1173,7 @@ class Build:
 
     def __repr__(self) -> str:
         return (
-            f"{' '.join([str(i) for i in self.inputs])} "
+            f"{' '.join([str(i) for i in self._inputs])} "
             + f"{' '.join([str(i) for i in self.depends])} => "
             f"{self.rulename.name} => {' '.join([str(i) for i in self.outputs])}"
         )
@@ -1190,7 +1201,7 @@ class Build:
                     runDir = cmd[3:].replace(
                         self.vars.get("cmake_ninja_workdir", ""), ""
                     )
-                for fin in self.inputs:
+                for fin in self._inputs:
                     if fin.is_a_file:
                         if fin.name in cmd:
                             found = True
@@ -1222,7 +1233,9 @@ class Build:
         return re.sub(regex, replacer, name)
 
     def addDep(self, dep: "BuildTarget"):
-        self.depends.add(dep)
+        if dep not in self.depends:
+            self.depends.append(dep)
 
     def addDeps(self, deps: List["BuildTarget"]):
-        self.depends.update(deps)
+        for d in deps:
+            self.addDep(d)
