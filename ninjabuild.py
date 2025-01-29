@@ -881,6 +881,8 @@ class NinjaParser:
         self.compilerIncludes = compilerIncludes
 
     def pruneTransitivePhonyTargets(self):
+        #FIXME 
+        # revist that at some point
         startingBuild = self.all_outputs["all"].producedby
 
         ctx = PrunedVisitorContext()
