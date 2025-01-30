@@ -552,6 +552,10 @@ class Build:
                     )
                     ctx.current.addDep(maybe_cc_import)
                     ctx.bazelbuild.bazelTargets.add(maybe_cc_import)
+                    for d in maybe_cc_import.deps:
+                        logging.info(f"Adding dep {d.name} because of cc_import {maybe_cc_import.name}")
+                        if isinstance(d, BazelCCImport):
+                            ctx.bazelbuild.bazelTargets.add(d)
                 return
             else:
                 logging.error(f"External dep {el.name} has an unexpected opaque")

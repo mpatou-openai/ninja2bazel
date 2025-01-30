@@ -119,6 +119,7 @@ def _findCPPIncludeForFile(
 
         logging.debug(f"Found {file} in the includes variable using {d}")
         # Check if the file is part of the cc_imports as we don't want to recurse for headers there
+        # We have to do it twice because now we are not looking at a file in the standard include paths
         for imp in cc_imports:
             assert isinstance(imp.opaque, BazelCCImport)
             if full_file_name in imp.opaque.hdrs:
@@ -314,6 +315,9 @@ def findCPPIncludes(
                 generatedDir,
             )
             ret += cppIncludes
+
+        if not found:
+            logging.warning(f"Could not find {file} as used by {name}, include dirs {includes_dirs}") 
 
         # We don't include compiler includes in the list of includes
         if not found:
