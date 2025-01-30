@@ -364,6 +364,7 @@ class Rule:
 
 
 class Build:
+    _protoNames: Dict[str, str] = {}
     staticFiles: Dict[str, ExportedFile] = {}
     remapPaths: Dict[str, str] = {}
 
@@ -470,7 +471,7 @@ class Build:
                 # we end up visiting protobuf files and ctx.current is pointing to the c++ library or binary
                 # we don't want to add it here
 
-                target = dep.name[1:].split("/")[-1].replace(".proto", "_proto")
+                target = f"{Build._getProtoName(dep)}_proto"
                 logging.info(f"Adding dep {target} to {el.name}")
                 if dep.name.startswith("@google/protobuf"):
                     ctx.current.addDep(
@@ -525,6 +526,8 @@ class Build:
             and el.opaque is not None
             and ctx.current is not None
         ):
+            # There is another way some libraires are added as dependencies to a build, they
+            # are just inputs for it 
             maybe_cc_import = el.opaque
             if isinstance(maybe_cc_import, BazelCCImport):
                 # This is to allow to materialize the cc_import in the BUILD file
@@ -575,7 +578,7 @@ class Build:
 
             for dep in el.depends:
                 # strip the @ marker
-                target = dep.name[1:].split("/")[-1].replace(".proto", "_proto")
+                target = f"{Build._getProtoName(dep)}_proto"
                 logging.info(f"Adding dep {target} to {el.name}")
                 if dep.name.startswith("@google/protobuf"):
                     ctx.current.addDep(
@@ -712,6 +715,7 @@ class Build:
         self, ctx: BazelBuildVisitorContext, el: "BuildTarget", cmd: str
     ) -> bool:
         assert ctx.current is not None
+        proto = self._getProtoName(el)
         arr = el.name.split(os.path.sep)
         filename = arr[-1]
         # TODO use negative forward looking
@@ -720,7 +724,6 @@ class Build:
         if not match:
             logging.info("not a match")
             return True
-        proto = match.group(1)
         if match.group(2) is None:
             grpc = False
         else:
@@ -946,19 +949,50 @@ class Build:
                 [ctx.current.addDep(o) for o in outs]
         ctx.current = genTarget
         return True
+    
+    @classmethod
+    def _getProtoName(kls, element: BuildTarget) -> str:
+        regex = r"(.*?)(\.grpc)?\.pb\.(cc|h|cc\.o)$"
+        # clean extentions
+        matches = re.match(regex, element.shortName)
+        if not matches:
+            regex2 = r"(.*)\.proto$"
+            matches = re.match(regex2, element.shortName)
+            if not matches:
+                logging.error(f"Couldn't match {element.shortName}")
+                assert False
+        name = matches.group(1)
+
+        regexCleanUp = r"(.*)/CMakeFiles/[^/]+(/.*)"
+        matches = re.match(regexCleanUp, name)
+        if matches:
+            name = matches.group(1) + matches.group(2)
+
+        if element.location is not None and not name.startswith(element.location):
+            # Protobuf files seems not have location (why ?) so it helps normalize the name
+            name = f"{element.location}{name}"
+
+        if name in kls._protoNames:
+            return kls._protoNames[name]
+
+        logging.debug(f"Getting proto name for {element.shortName} => {name}")
+        arr = name.split(os.path.sep)
+        filename = arr[-1]
+        existingNames = list(kls._protoNames.values())
+
+        for i in sorted(range(-len(arr), 0), reverse=True):
+            logging.debug(f"Checking {name} {arr[i:]} i = {i} location = {element.location}")
+            filename = "_".join(arr[i:])
+            if filename not in existingNames:
+                kls._protoNames[name] = filename
+                return filename
+        assert False
 
     def _handleGRPCCCProtobuf(self, ctx: BazelBuildVisitorContext, el: BuildTarget):
         assert ctx.current is not None
         # We can rely on self.associatedBazelTarget usually protobuf related target produces multiple files and multiple bazel targets
         # Now that we cache the associated bazel targets there is limited risk to "recreate" the same target
-        arr = el.name.split(os.path.sep)
-        filename = arr[-1]
-        regex = r"(.*)\.grpc\.pb\.(cc\.o|h)"
-        matches = re.match(regex, filename)
-        if matches is None:
-            logging.info(f"Filename is {filename}")
-        assert matches is not None
-        proto = matches.group(1)
+        proto = self._getProtoName(el)
 
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
         t: BaseBazelTarget = getObject(
@@ -974,12 +1008,7 @@ class Build:
 
     def _handleCCProtobuf(self, ctx: BazelBuildVisitorContext, el: BuildTarget):
         assert ctx.current is not None
-        arr = el.name.split(os.path.sep)
-        filename = arr[-1]
-        regex = r"(.*)\.pb\.(cc\.o|h)"
-        matches = re.match(regex, filename)
-        assert matches is not None
-        proto = matches.group(1)
+        proto = self._getProtoName(el)
 
         location = TopLevelGroupingStrategy().getBuildFilenamePath(el)
 
