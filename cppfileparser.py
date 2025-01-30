@@ -93,7 +93,7 @@ def _findCPPIncludeForFile(
         # the include path might have it or not ...
         foundCCImport = False
         for cdir in compilerIncludes:
-            full_file_name2 = f"{cdir}/{file}"
+            full_file_name2 = resolvePath(f"{cdir}/{file}")
             if not os.path.exists(full_file_name2) or os.path.isdir(full_file_name2):
                 continue
             # File might be in the standard include path of the compiler but still coming from
