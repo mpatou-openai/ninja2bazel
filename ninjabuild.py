@@ -611,13 +611,13 @@ class NinjaParser:
                 continue
             # FIXME think about deduping here 
             for i in build.getInputs():
-                generatedOutputsNeeded.update(self._finalizeHeadersForGeneratedFileForBuild(i, build, current_dir, workDir))
+                generatedOutputsNeeded.update(self._finalizeHeadersForNonGeneratedFileForBuild(i, build, current_dir, workDir))
             # TODO revisit if we need to extend the inputs o: the dependencies of the build
             # dependencies might have a side effect that is not desirable for generated files
             for g in generatedOutputsNeeded:
                 build.addInput(g)
 
-    def _finalizeHeadersForGeneratedFileForBuild(self, elem: BuildTarget, build: Build, current_dir: str, workDir: str) -> Set[BuildTarget]:
+    def _finalizeHeadersForNonGeneratedFileForBuild(self, elem: BuildTarget, build: Build, current_dir: str, workDir: str) -> Set[BuildTarget]:
         generatedOutputsNeeded: Set[BuildTarget] = set()
         includes_dirs: List[str] = []
         generated = False
